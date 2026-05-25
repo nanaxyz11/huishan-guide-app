@@ -100,8 +100,9 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     # 2. 写入 Supabase（忽略异常，避免打断用户）
     try:
         st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
-    except Exception:
-        pass  # 静默失败，不影响前端
+    except Exception as e:
+        # 打印错误到终端（可以在 Streamlit Cloud 的 Logs 中看到）
+        print(f"[Supabase写入错误] {e}")
 
 # 页面加载埋点
 if f"loaded_{poi_id}" not in st.session_state:
