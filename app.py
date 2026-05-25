@@ -1,4 +1,46 @@
+import streamlit as st
+import json
+import os
+import time
+from datetime import datetime
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from supabase import create_client  # 新增：导入 Supabase 客户端
 
+# 1. 基础页面声明
+st.set_page_config(page_title="惠山古镇 AI 导览实验平台", layout="centered", initial_sidebar_state="collapsed")
+
+# 样式（不变）
+st.markdown("""
+    <style>
+    .source-chip {
+        display: inline-flex;
+        align-items: center;
+        background-color: #f0f2f6;
+        color: #31333f;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+        margin-top: 8px;
+        border: 1px solid #e0e2e6;
+    }
+    .qa-box {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #ff4b4b;
+        margin-top: 10px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# 2. 从外部 JSON 读取锁定知识库
+@st.cache_data
+def load_poi_data():
+    with open("data/poi_content.json", "r", encoding="utf-8") as f:
         return json.load(f)
 
 poi_database = load_poi_data()
@@ -69,7 +111,7 @@ if f"loaded_{poi_id}" not in st.session_state:
 def simulate_rag_engine(user_query):
     start_time = time.time()
     DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
-    DIFY_API_KEY = "Bearer app-rzITs8smrzMUhhdraDriLuRp"   # ⚠️ 请替换成你的真实密钥
+    DIFY_API_KEY = "Bearer 你的_app-rzITs8smrzMUhhdraDriLuRp"   # ⚠️ 请替换成你的真实密钥
     
     payload = {
         "inputs": {"current_poi": current_poi["name"]},
