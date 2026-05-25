@@ -7,12 +7,11 @@ import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from supabase import create_client  # 新增：导入 Supabase 客户端
+from supabase import create_client
 
-# 1. 基础页面声明
+# ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览实验平台", layout="centered", initial_sidebar_state="collapsed")
 
-# 样式（不变）
 st.markdown("""
     <style>
     .source-chip {
@@ -37,7 +36,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 从外部 JSON 读取锁定知识库
+# ==================== 加载本地知识库 ====================
 @st.cache_data
 def load_poi_data():
     with open("data/poi_content.json", "r", encoding="utf-8") as f:
@@ -45,7 +44,7 @@ def load_poi_data():
 
 poi_database = load_poi_data()
 
-# 3. 解析 URL 参数
+# ==================== URL 参数解析 ====================
 query_params = st.query_params
 participant_id = query_params.get("pid", "P_TEST_USER")
 condition = query_params.get("condition", "recchatbox").lower()
@@ -57,62 +56,64 @@ if poi_id not in poi_database:
 
 current_poi = poi_database[poi_id]
 
-# 4. 初始化 Session State
+# ==================== Session 状态初始化 ====================
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "page_load_time" not in st.session_state:
     st.session_state.page_load_time = time.time()
 if "ai_response" not in st.session_state:
     st.session_state.ai_response = None
-
-# 新增：初始化 Supabase 客户端（从 Streamlit Secrets 读取配置）
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# 5. 日志记录函数（修改为写入 Supabase）
-def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks=""):
-    # 计算页面停留时间
+# ==================== 日志记录函数（写入 Supabase + 本地CSV） ====================
+def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     query_length = len(query_text) if query_text else 0
-    
-    # 构建事件数据字典（字段名必须与 Supabase 表中的列名完全一致）
+
     event_data = {
-        "participant_id": participant_id,
-        "experimental_condition": condition,
-        "poi_id": poi_id,
-        "action_type": action_type,
+        "participant_id": str(participant_id),
+        "experimental_condition": str(condition),
+        "poi_id": str(poi_id),
+        "action_type": str(action_type),
         "time_on_page_seconds": round(time_on_page, 2),
-        "user_query_text": query_text,
+        "user_query_text": str(query_text),
         "user_query_word_count": query_length,
         "rag_response_time_ms": round(response_time * 1000, 1),
-        "retrieved_chunks_saved": retrieved_chunks,
-        "displayed_source_cue": "",   # 如果你需要记录来源标签，可以后续从 RAG 返回中获取；这里先留空
+        "retrieved_chunks_saved": str(retrieved_chunks),
+        "displayed_source_cue": str(displayed_source_cue),
         "timestamp": datetime.now().isoformat()
     }
-    
-    # 本地保留一份（可选，用于调试）
-    st.session_state.logs.append(event_data)
-    
-    # 写入 Supabase
-    try:
-        result = st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
-        # 如果写入成功，什么都不做；失败时打印错误到终端（不影响前端）
-    except Exception as e:
-        print(f"[Supabase 写入错误] {e}")
 
-# 首次加载日志
+    # 1. 写入本地 CSV（备份）
+    st.session_state.logs.append(event_data)
+    df = pd.DataFrame(st.session_state.logs)
+    log_file = "logs/interaction_log.csv"
+    os.makedirs("logs", exist_ok=True)
+    if not os.path.isfile(log_file):
+        df.to_csv(log_file, index=False, encoding="utf-8-sig")
+    else:
+        df.to_csv(log_file, mode='a', header=False, index=False, encoding="utf-8-sig")
+
+    # 2. 写入 Supabase（忽略异常，避免打断用户）
+    try:
+        st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
+    except Exception:
+        pass  # 静默失败，不影响前端
+
+# 页面加载埋点
 if f"loaded_{poi_id}" not in st.session_state:
     st.session_state[f"loaded_{poi_id}"] = True
     log_experimental_event(action_type="page_loaded")
 
-# ==================== Dify RAG 函数（完全不变） ====================
+# ==================== Dify RAG 函数（增强稳定性） ====================
 def simulate_rag_engine(user_query):
     start_time = time.time()
     DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
-    DIFY_API_KEY = "Bearer 你的_app-rzITs8smrzMUhhdraDriLuRp"   # ⚠️ 请替换成你的真实密钥
-    
+    DIFY_API_KEY = "Bearer app-rzITs8smrzMUhhdraDriLuRp"   # ⚠️ 必须替换为真实密钥
+
     payload = {
         "inputs": {"current_poi": current_poi["name"]},
         "query": user_query,
@@ -123,7 +124,7 @@ def simulate_rag_engine(user_query):
         "Authorization": DIFY_API_KEY,
         "Content-Type": "application/json"
     }
-    
+
     session = requests.Session()
     retry_strategy = Retry(
         total=3,
@@ -134,7 +135,7 @@ def simulate_rag_engine(user_query):
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    
+
     try:
         response = session.post(DIFY_API_URL, json=payload, headers=headers, timeout=15)
         response.raise_for_status()
@@ -153,22 +154,11 @@ def simulate_rag_engine(user_query):
     except requests.exceptions.Timeout:
         elapsed_time = time.time() - start_time
         return "【网络超时】请重试。", "系统网络延迟警告", "[Timeout]", elapsed_time
-    except requests.exceptions.ConnectionError as e:
+    except Exception:
         elapsed_time = time.time() - start_time
-        print(f"[DEBUG] 连接错误详情: {e}")
-        return "【网络连接失败】请检查网络，稍后重试。", "网络连接错误", "[ConnectionError]", elapsed_time
-    except requests.exceptions.HTTPError as e:
-        elapsed_time = time.time() - start_time
-        if response.status_code == 401:
-            return "【认证失败】API Key 无效。", "API认证错误", "[401]", elapsed_time
-        else:
-            return f"【服务器错误】HTTP {response.status_code}，请稍后重试。", "服务端异常", f"[HTTP{response.status_code}]", elapsed_time
-    except Exception as e:
-        elapsed_time = time.time() - start_time
-        print(f"[DEBUG] 未知错误: {e}")
-        return f"【系统故障】请向研究员报告。错误类型: {type(e).__name__}", "技术故障降级保护", "[Error]", elapsed_time
+        return "【系统故障】请稍后重试。", "技术故障降级保护", "[Error]", elapsed_time
 
-# ========== 以下 UI 渲染部分完全不变 ==========
+# ==================== 前端界面渲染 ====================
 st.title(f"🏛️ 惠山古镇智慧导览：{current_poi['name']}")
 
 if condition == "baseline":
@@ -185,7 +175,7 @@ elif condition == "free_text":
         if user_q:
             ans, src, chk, r_time = simulate_rag_engine(user_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk}
-            log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk)
+            log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
     if st.session_state.ai_response:
         st.markdown(f"<div class='qa-box'><b>AI 智能导览解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='source-chip'>🔍 权威数字证源：{st.session_state.ai_response['src']}</div>", unsafe_allow_html=True)
@@ -199,13 +189,13 @@ elif condition == "recchatbox":
         if st.button(f"✨ {rec_q}"):
             ans, src, chk, r_time = simulate_rag_engine(rec_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk, "clicked_q": rec_q}
-            log_experimental_event(action_type="rec_clicked", query_text=rec_q, response_time=r_time, retrieved_chunks=chk)
+            log_experimental_event(action_type="rec_clicked", query_text=rec_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
     user_q = st.text_input("或者，您也可以在此输入其他自由问题：", key="rec_q")
     if st.button("提交自由问题", key="btn_rec"):
         if user_q:
             ans, src, chk, r_time = simulate_rag_engine(user_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk, "clicked_q": user_q}
-            log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk)
+            log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
     if st.session_state.ai_response:
         st.markdown(f"<div class='qa-box'><b>AI 智能导览解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='source-chip'>🔍 权威数字证源：{st.session_state.ai_response['src']}</div>", unsafe_allow_html=True)
@@ -218,7 +208,9 @@ if st.button("✅ 我已完成当前 POI 的阅读与交互"):
 
 st.sidebar.markdown("### 🛠️ 实验控制后台")
 if st.sidebar.button("导出全样本最新交互日志 CSV"):
-    if os.path.exists("logs/interaction_log.csv"):
-        st.sidebar.download_button("点击下载 CSV", data=open("logs/interaction_log.csv", "rb"), file_name=f"experiment_master_log.csv")
+    if st.session_state.logs:
+        df = pd.DataFrame(st.session_state.logs)
+        csv_data = df.to_csv(index=False, encoding="utf-8-sig")
+        st.sidebar.download_button("点击下载 CSV", data=csv_data, file_name="experiment_master_log.csv")
     else:
         st.sidebar.warning("暂无日志产生")
