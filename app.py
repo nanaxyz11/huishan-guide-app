@@ -33,6 +33,10 @@ st.markdown("""
         border-left: 4px solid #ff4b4b;
         margin-top: 10px;
     }
+    .followup-button {
+        margin-top: 10px;
+        margin-right: 8px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -59,10 +63,14 @@ current_poi = poi_database[poi_id]
 # ==================== Session 状态初始化 ====================
 if "logs" not in st.session_state:
     st.session_state.logs = []
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []   # 存储 [{"question": str, "answer": str}, ...]
 if "page_load_time" not in st.session_state:
     st.session_state.page_load_time = time.time()
 if "ai_response" not in st.session_state:
     st.session_state.ai_response = None
+if "followup_questions" not in st.session_state:
+    st.session_state.followup_questions = []      # 当前显示的建议问题列表
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
@@ -97,23 +105,17 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     else:
         df.to_csv(log_file, mode='a', header=False, index=False, encoding="utf-8-sig")
 
-    # 2. 写入 Supabase（忽略异常，避免打断用户）
+    # 2. 写入 Supabase
     try:
         st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
-    except Exception as e:
-        # 打印错误到终端（可以在 Streamlit Cloud 的 Logs 中看到）
-        print(f"[Supabase写入错误] {e}")
+    except Exception:
+        pass
 
-# 页面加载埋点
-if f"loaded_{poi_id}" not in st.session_state:
-    st.session_state[f"loaded_{poi_id}"] = True
-    log_experimental_event(action_type="page_loaded")
-
-# ==================== Dify RAG 函数（增强稳定性） ====================
+# ==================== Dify RAG 函数（回答问题） ====================
 def simulate_rag_engine(user_query):
     start_time = time.time()
     DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
-    DIFY_API_KEY = "Bearer app-rzITs8smrzMUhhdraDriLuRp"   # ⚠️ 必须替换为真实密钥
+    DIFY_API_KEY = "Bearer app-rzITs8smrzMUhhdraDriLuRp"   # 你的主应用 API Key
 
     payload = {
         "inputs": {"current_poi": current_poi["name"]},
@@ -159,6 +161,75 @@ def simulate_rag_engine(user_query):
         elapsed_time = time.time() - start_time
         return "【系统故障】请稍后重试。", "技术故障降级保护", "[Error]", elapsed_time
 
+# ==================== 生成延伸问题（调用独立的 Dify 应用） ====================
+def generate_followup_questions(user_question, ai_answer):
+    """基于用户问题和 AI 回答生成 3 个后续问题"""
+    FOLLOWUP_API_URL = "https://api.dify.ai/v1/chat-messages"
+    FOLLOWUP_API_KEY = "Bearer app-CCck7NxI8NLZIxf24Q247Hti"   # ⚠️ 替换为你新建的“生成问题”应用的 API Key
+
+    # 构建提示词
+    prompt = f"""用户问题：{user_question}
+AI 回答：{ai_answer}
+请根据以上内容，生成 3 个与文化遗产相关的、开放式的、引导用户继续深入了解的后续问题。每个问题一行，只输出三个问题，不要序号，不要额外解释。"""
+
+    payload = {
+        "inputs": {},
+        "query": prompt,
+        "response_mode": "blocking",
+        "user": participant_id
+    }
+    headers = {
+        "Authorization": FOLLOWUP_API_KEY,
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.post(FOLLOWUP_API_URL, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        res_json = response.json()
+        content = res_json.get("answer", "")
+        # 提取每行一个问题
+        lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+        # 只取前3个，并去除序号（如 "1. " 或 "1、"）
+        questions = []
+        for line in lines[:3]:
+            # 去掉可能的序号前缀（如 "1. "、"1、"、"1." 等）
+            import re
+            cleaned = re.sub(r'^\d+[\.\、]?\s*', '', line)
+            questions.append(cleaned)
+        # 如果不足3个，补一些默认问题
+        while len(questions) < 3:
+            questions.append("您还想了解这个景点的其他方面吗？")
+        return questions
+    except Exception:
+        # 生成失败时返回默认问题，确保用户体验不中断
+        return [
+            "这个景点还有哪些有趣的历史故事？",
+            "与这里相关的名人有哪些？",
+            "有什么特别的建筑细节值得关注吗？"
+        ]
+
+# ==================== 处理用户提问（核心流程） ====================
+def handle_question(question):
+    with st.spinner("AI 导览员正在思考..."):
+        # 1. 调用 RAG 得到回答
+        answer, source, chunks, elapsed = simulate_rag_engine(question)
+        # 2. 保存到会话历史
+        st.session_state.conversation_history.append({"question": question, "answer": answer, "source": source})
+        # 3. 记录日志
+        log_experimental_event(
+            action_type="question_submitted",
+            query_text=question,
+            response_time=elapsed,
+            retrieved_chunks=chunks,
+            displayed_source_cue=source
+        )
+        # 4. 生成延伸问题（基于当前问题和回答）
+        followups = generate_followup_questions(question, answer)
+        st.session_state.followup_questions = followups
+        # 5. 刷新页面显示
+        st.rerun()
+
 # ==================== 前端界面渲染 ====================
 st.title(f"🏛️ 惠山古镇智慧导览：{current_poi['name']}")
 
@@ -170,43 +241,61 @@ if condition == "baseline":
 elif condition == "free_text":
     st.markdown(f"### 景区官方概览\n{current_poi['info']}")
     st.write("---")
-    st.markdown("#### 💬 向 AI 导览员自由提问")
-    user_q = st.text_input("您可以输入任何关于当前 POI 历史、文化、碑文的追问：", key="free_q")
-    if st.button("提交问题", key="btn_free"):
-        if user_q:
-            ans, src, chk, r_time = simulate_rag_engine(user_q)
-            st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk}
-            log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
-    if st.session_state.ai_response:
-        st.markdown(f"<div class='qa-box'><b>AI 智能导览解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='source-chip'>🔍 权威数字证源：{st.session_state.ai_response['src']}</div>", unsafe_allow_html=True)
+    st.markdown("#### 💬 自由提问（每次回答后会生成3个后续问题）")
+
+    # 显示历史对话
+    for idx, item in enumerate(st.session_state.conversation_history):
+        st.markdown(f"**您**：{item['question']}")
+        st.markdown(f"<div class='qa-box'><b>AI 解答：</b><br>{item['answer']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='source-chip'>🔍 {item['source']}</div>", unsafe_allow_html=True)
+        st.write("---")
+
+    # 当前输入框
+    user_q = st.text_input("请输入您的问题：", key="free_text_input")
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("发送", key="send_btn"):
+            if user_q.strip():
+                handle_question(user_q.strip())
+
+    # 显示生成的延伸问题按钮（如果存在）
+    if st.session_state.followup_questions:
+        st.markdown("#### 💡 相关问题推荐（点击继续提问）")
+        cols = st.columns(3)
+        for i, q in enumerate(st.session_state.followup_questions):
+            with cols[i % 3]:
+                if st.button(f"❓ {q}", key=f"followup_{i}"):
+                    handle_question(q)
 
 elif condition == "recchatbox":
     st.markdown(f"### 景区官方概览\n{current_poi['info']}")
     st.write("---")
     st.markdown("#### 💡 上下文智能化启发提问 (RecChatbox)")
-    st.caption("根据您当前所处的历史空间情境，AI 为您推荐以下深入探究方向：")
+    st.caption("根据您当前所处的历史空间情境，AI 为您推荐以下深度探究方向：")
+    # 保持原有的推荐按钮逻辑，但不添加自动延伸问题（保持原样）
     for rec_q in current_poi["recs"]:
         if st.button(f"✨ {rec_q}"):
             ans, src, chk, r_time = simulate_rag_engine(rec_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk, "clicked_q": rec_q}
             log_experimental_event(action_type="rec_clicked", query_text=rec_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
-    user_q = st.text_input("或者，您也可以在此输入其他自由问题：", key="rec_q")
+    user_q = st.text_input("或者，您也可以在此输入其他自由提问：", key="rec_txt")
     if st.button("提交自由问题", key="btn_rec"):
         if user_q:
             ans, src, chk, r_time = simulate_rag_engine(user_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk, "clicked_q": user_q}
             log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
     if st.session_state.ai_response:
-        st.markdown(f"<div class='qa-box'><b>AI 智能导览解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='qa-box'><b>AI 智能解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='source-chip'>🔍 权威数字证源：{st.session_state.ai_response['src']}</div>", unsafe_allow_html=True)
 
+# 底部按钮
 st.write("---")
 if st.button("✅ 我已完成当前 POI 的阅读与交互"):
     log_experimental_event(action_type="completed")
     st.success("当前位点交互日志已安全写入后台。")
-    st.markdown(f"**[请点击此处返回 Qualtrics 线上问卷，进行当前 POI 的即时文化理解题测试](https://survey.qualtrics.com/jfe/form/your_survey_id?pid={participant_id}&poi={poi_id}&cond={condition})**")
+    st.markdown(f"**[请点击此处返回 Qualtrics 线上问卷](https://survey.qualtrics.com/jfe/form/your_survey_id?pid={participant_id}&poi={poi_id}&cond={condition})**")
 
+# 侧边栏日志导出
 st.sidebar.markdown("### 🛠️ 实验控制后台")
 if st.sidebar.button("导出全样本最新交互日志 CSV"):
     if st.session_state.logs:
