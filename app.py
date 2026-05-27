@@ -172,7 +172,7 @@ def simulate_rag_engine(user_query):
 def generate_followup_questions(user_question, ai_answer):
     """基于用户问题和 AI 回答生成 3 个后续问题，失败时返回默认问题"""
     FOLLOWUP_API_URL = "https://api.dify.ai/v1/chat-messages"
-    FOLLOWUP_API_KEY = "Bearer app-xxxxxxxxxxxxxxxxxxxx"   # ⚠️ 替换为你新建的“生成问题”应用的 API Key
+    FOLLOWUP_API_KEY = "Bearer app-CCck7NxI8NLZIxf24Q247Hti"   # ⚠️ 替换为你新建的“生成问题”应用的 API Key
 
     # 构建提示词
     prompt = f"""用户问题：{user_question}
