@@ -93,18 +93,32 @@ def load_poi_data():
 
 poi_database = load_poi_data()
 
-# ==================== URL 参数解析 ====================
+# ==================== URL 参数解析与自动跳转 ====================
 query_params = st.query_params
 participant_id = query_params.get("pid", "P_TEST_USER")
-condition = query_params.get("condition", "recchatbox").lower()
-poi_id = query_params.get("poi", "erquan").lower()
+# 从 URL 中获取 condition 参数，如果没有，则默认进入自由问答模式
+default_condition = query_params.get("condition", "free_text").lower() 
 
+# 关键点：页面加载时检查并设置默认状态
+if not query_params.get("condition"):
+    # 设置一个标志，避免无限循环，只触发一次自动设置
+    if "redirect_done" not in st.session_state:
+        # 保留所有已有的参数，并为缺失的 'condition' 设置默认值 'free_text'
+        new_params = dict(query_params)
+        new_params["condition"] = "free_text"
+        st.query_params.update(new_params)
+        st.session_state.redirect_done = True
+        st.rerun()
+
+# 获取最终使用的参数
+condition = st.query_params.get("condition", "free_text").lower()
+poi_id = st.query_params.get("poi", "erquan").lower()
+
+# 确保后续代码使用的 condition 和 poi_id 是处理后的值
 if poi_id not in poi_database:
     st.error("POI ID 错误，请检查 URL 参数。")
     st.stop()
-
-current_poi = poi_database[poi_id]
-
+    
 # ==================== Session 状态初始化（确保所有变量存在） ====================
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
