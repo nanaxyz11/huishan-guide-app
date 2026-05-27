@@ -16,7 +16,6 @@ st.set_page_config(page_title="惠山古镇 AI 导览实验平台", layout="cent
 # ==================== DeepSeek 风格 CSS ====================
 st.markdown("""
     <style>
-    /* 隐藏默认元素 */
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .main .block-container {
@@ -66,22 +65,6 @@ st.markdown("""
         box-shadow: 0 2px 6px rgba(0,0,0,0.05);
         z-index: 99;
     }
-    .followup-btn {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 20px;
-        padding: 6px 12px;
-        font-size: 12px;
-        color: #495057;
-        transition: all 0.2s ease;
-        margin: 4px 4px 0 0;
-        display: inline-block;
-    }
-    .followup-btn:hover {
-        background-color: #e9ecef;
-        border-color: #ced4da;
-        cursor: pointer;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -93,33 +76,42 @@ def load_poi_data():
 
 poi_database = load_poi_data()
 
-# ==================== URL 参数解析与自动跳转 ====================
+# ==================== URL 参数解析与自动跳转（安全版本） ====================
 query_params = st.query_params
-participant_id = query_params.get("pid", "P_TEST_USER")
-# 从 URL 中获取 condition 参数，如果没有，则默认进入自由问答模式
-default_condition = query_params.get("condition", "free_text").lower() 
 
-# 关键点：页面加载时检查并设置默认状态
-if not query_params.get("condition"):
-    # 设置一个标志，避免无限循环，只触发一次自动设置
+# 1. 先获取原始参数（可能为空）
+raw_pid = query_params.get("pid", "P_TEST_USER")
+raw_condition = query_params.get("condition", "")
+raw_poi_id = query_params.get("poi", "erquan").lower()
+
+# 2. 自动跳转逻辑：如果 condition 参数不存在，则自动补全为 free_text
+if not raw_condition:
+    # 防止无限循环，使用 session_state 标记
     if "redirect_done" not in st.session_state:
-        # 保留所有已有的参数，并为缺失的 'condition' 设置默认值 'free_text'
+        # 构造新参数：保留原有 pid 和 poi，添加 condition=free_text
         new_params = dict(query_params)
         new_params["condition"] = "free_text"
         st.query_params.update(new_params)
         st.session_state.redirect_done = True
         st.rerun()
+    else:
+        # 如果已经跳转过但 condition 仍为空，强行设置
+        raw_condition = "free_text"
+else:
+    raw_condition = raw_condition.lower()
 
-# 获取最终使用的参数
-condition = st.query_params.get("condition", "free_text").lower()
-poi_id = st.query_params.get("poi", "erquan").lower()
+# 3. 最终使用的参数
+participant_id = raw_pid
+condition = raw_condition if raw_condition else "free_text"
+poi_id = raw_poi_id
 
-# 确保后续代码使用的 condition 和 poi_id 是处理后的值
+# 4. 验证 POI 并获取 current_poi（确保总是存在）
 if poi_id not in poi_database:
-    st.error("POI ID 错误，请检查 URL 参数。")
-    st.stop()
-    
-# ==================== Session 状态初始化（确保所有变量存在） ====================
+    st.error(f"POI ID '{poi_id}' 不存在，将使用默认景点 'erquan'。")
+    poi_id = "erquan"
+current_poi = poi_database[poi_id]
+
+# ==================== Session 状态初始化 ====================
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 if "page_load_time" not in st.session_state:
@@ -129,7 +121,7 @@ if "logs" not in st.session_state:
 if "followup_questions" not in st.session_state:
     st.session_state.followup_questions = []
 if "ai_response" not in st.session_state:
-    st.session_state.ai_response = None          # 用于 recchatbox
+    st.session_state.ai_response = None
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
@@ -164,23 +156,23 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     else:
         df.to_csv(log_file, mode='a', header=False, index=False, encoding="utf-8-sig")
 
-    # 写入 Supabase
+    # 写入 Supabase（错误仅打印，不影响前端）
     try:
         st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
     except Exception as e:
-        st.error(f"⚠️ 数据存储失败（不影响对话）: {e}")
         print(f"[Supabase Error] {e}")
+        # 不向用户显示错误，避免干扰体验
 
 # 页面加载埋点
 if f"loaded_{poi_id}" not in st.session_state:
     st.session_state[f"loaded_{poi_id}"] = True
     log_experimental_event(action_type="page_loaded")
 
-# ==================== Dify RAG 函数（主问答） ====================
+# ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query):
     start_time = time.time()
     DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
-    DIFY_API_KEY = "Bearer app-rzITs8smrzMUhhdraDriLuRp"   # 你的主应用 Key
+    DIFY_API_KEY = "Bearer app-rzITs8smrzMUhhdraDriLuRp"
 
     payload = {
         "inputs": {"current_poi": current_poi["name"]},
@@ -229,7 +221,7 @@ def simulate_rag_engine(user_query):
 # ==================== 生成延伸问题 ====================
 def generate_followup_questions(user_question, ai_answer):
     FOLLOWUP_API_URL = "https://api.dify.ai/v1/chat-messages"
-    FOLLOWUP_API_KEY = "Bearer app-CCck7NxI8NLZIxf24Q247Hti"   # 你的“生成问题”应用 Key
+    FOLLOWUP_API_KEY = "Bearer app-CCck7NxI8NLZIxf24Q247Hti"
 
     prompt = f"""用户问题：{user_question}
 AI 回答：{ai_answer}
@@ -259,15 +251,15 @@ AI 回答：{ai_answer}
         while len(questions) < 3:
             questions.append("您还想了解这个景点的其他方面吗？")
         return questions
-    except Exception as e:
-        st.error(f"生成推荐问题失败: {e}")
+    except Exception:
+        # 静默失败，返回默认问题
         return [
             "这个景点还有哪些有趣的历史故事？",
             "与这里相关的名人有哪些？",
             "有什么特别的建筑细节值得关注吗？"
         ]
 
-# ==================== 处理用户提问（用于 free_text） ====================
+# ==================== 处理用户提问 ====================
 def handle_question(question):
     with st.spinner("AI 导览员正在思考..."):
         answer, source, chunks, elapsed = simulate_rag_engine(question)
@@ -290,13 +282,14 @@ def handle_question(question):
 # ==================== 前端界面 ====================
 st.title(f"🏛️ 惠山古镇智慧导览：{current_poi['name']}")
 
-# ---------- baseline ----------
+# 显示当前模式（调试用，可删除）
+st.caption(f"模式: {condition} | 参与者: {participant_id} | 景点: {poi_id}")
+
 if condition == "baseline":
     st.markdown(f"### 景区官方概览\n{current_poi['info']}")
     st.image("https://images.unsplash.com/photo-1629814479361-9f268b8b809a?q=80&w=600&auto=format&fit=crop")
     st.caption("数据来源：无锡惠山古镇官方遗产保护名录与街区静态档案")
 
-# ---------- free_text ----------
 elif condition == "free_text":
     st.markdown(f"**📍 {current_poi['name']}**  \n{current_poi['info']}")
     st.divider()
@@ -323,12 +316,8 @@ elif condition == "free_text":
     if user_input and user_input.strip():
         handle_question(user_input.strip())
 
-# ---------- recchatbox ----------
 elif condition == "recchatbox":
-    # 确保 ai_response 存在（防御）
-    if "ai_response" not in st.session_state:
-        st.session_state.ai_response = None
-
+    # 原有 recchatbox 逻辑（保持兼容）
     st.markdown(f"### 景区官方概览\n{current_poi['info']}")
     st.write("---")
     st.markdown("#### 💡 上下文智能化启发提问 (RecChatbox)")
@@ -351,7 +340,7 @@ elif condition == "recchatbox":
         st.markdown(f"<div class='qa-box'><b>AI 智能解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='source-chip'>🔍 权威数字证源：{st.session_state.ai_response['src']}</div>", unsafe_allow_html=True)
 
-# ---------- 底部完成按钮 ----------
+# ==================== 底部完成按钮 ====================
 st.write("---")
 if st.button("✅ 我已完成当前 POI 的阅读与交互"):
     log_experimental_event(action_type="completed")
