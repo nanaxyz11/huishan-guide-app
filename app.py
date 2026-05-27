@@ -23,12 +23,10 @@ st.markdown("""
         padding: 1rem 1rem 6rem 1rem;
         max-width: 800px;
     }
-    /* 背景色 */
     .stApp {
         background-color: #f7f7f8;
         font-family: 'Segoe UI', 'Roboto', sans-serif;
     }
-    /* 用户消息气泡 */
     [data-testid="stChatMessage"][data-testid*="user"] {
         background-color: #ffffff;
         border: 1px solid #e5e5e5;
@@ -37,14 +35,12 @@ st.markdown("""
         margin: 10px 0;
         box-shadow: 0 1px 1px rgba(0,0,0,0.05);
     }
-    /* AI 消息气泡 */
     [data-testid="stChatMessage"][data-testid*="assistant"] {
         background-color: #f0f0f0;
         border-radius: 18px;
         padding: 8px 16px;
         margin: 10px 0;
     }
-    /* 来源标签 */
     .source-chip {
         display: inline-flex;
         align-items: center;
@@ -57,7 +53,6 @@ st.markdown("""
         margin-top: 8px;
         border: 1px solid #d2e3fc;
     }
-    /* 底部固定输入框 */
     .stChatInput {
         position: fixed;
         bottom: 20px;
@@ -71,7 +66,6 @@ st.markdown("""
         box-shadow: 0 2px 6px rgba(0,0,0,0.05);
         z-index: 99;
     }
-    /* 推荐问题按钮样式 */
     .followup-btn {
         background-color: #f8f9fa;
         border: 1px solid #dee2e6;
@@ -111,21 +105,23 @@ if poi_id not in poi_database:
 
 current_poi = poi_database[poi_id]
 
-# ==================== Session 状态初始化 ====================
+# ==================== Session 状态初始化（确保所有变量存在） ====================
 if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []   # [{"question": str, "answer": str, "source": str}]
+    st.session_state.conversation_history = []
 if "page_load_time" not in st.session_state:
     st.session_state.page_load_time = time.time()
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "followup_questions" not in st.session_state:
-    st.session_state.followup_questions = []      # 当前展示的推荐问题
+    st.session_state.followup_questions = []
+if "ai_response" not in st.session_state:
+    st.session_state.ai_response = None          # 用于 recchatbox
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志记录（写入 Supabase + 本地 CSV） ====================
+# ==================== 日志记录 ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     query_length = len(query_text) if query_text else 0
@@ -154,7 +150,7 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     else:
         df.to_csv(log_file, mode='a', header=False, index=False, encoding="utf-8-sig")
 
-    # 写入 Supabase（如果失败，显示错误但不中断用户）
+    # 写入 Supabase
     try:
         st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
     except Exception as e:
@@ -216,7 +212,7 @@ def simulate_rag_engine(user_query):
         elapsed_time = time.time() - start_time
         return f"【系统故障】{str(e)[:50]}", "技术故障降级保护", "[Error]", elapsed_time
 
-# ==================== 生成延伸问题（独立 Dify 应用） ====================
+# ==================== 生成延伸问题 ====================
 def generate_followup_questions(user_question, ai_answer):
     FOLLOWUP_API_URL = "https://api.dify.ai/v1/chat-messages"
     FOLLOWUP_API_KEY = "Bearer app-CCck7NxI8NLZIxf24Q247Hti"   # 你的“生成问题”应用 Key
@@ -257,18 +253,15 @@ AI 回答：{ai_answer}
             "有什么特别的建筑细节值得关注吗？"
         ]
 
-# ==================== 核心交互：处理用户提问 ====================
+# ==================== 处理用户提问（用于 free_text） ====================
 def handle_question(question):
     with st.spinner("AI 导览员正在思考..."):
-        # 1. 获取 AI 回答
         answer, source, chunks, elapsed = simulate_rag_engine(question)
-        # 2. 保存到对话历史
         st.session_state.conversation_history.append({
             "question": question,
             "answer": answer,
             "source": source
         })
-        # 3. 记录日志
         log_experimental_event(
             action_type="question_submitted",
             query_text=question,
@@ -276,73 +269,75 @@ def handle_question(question):
             retrieved_chunks=chunks,
             displayed_source_cue=source
         )
-        # 4. 生成新的推荐问题
         followups = generate_followup_questions(question, answer)
         st.session_state.followup_questions = followups
-        # 5. 刷新界面
         st.rerun()
 
 # ==================== 前端界面 ====================
 st.title(f"🏛️ 惠山古镇智慧导览：{current_poi['name']}")
 
-# 条件判断：仅 free_text 模式启用完整对话+推荐循环
+# ---------- baseline ----------
 if condition == "baseline":
     st.markdown(f"### 景区官方概览\n{current_poi['info']}")
     st.image("https://images.unsplash.com/photo-1629814479361-9f268b8b809a?q=80&w=600&auto=format&fit=crop")
     st.caption("数据来源：无锡惠山古镇官方遗产保护名录与街区静态档案")
 
+# ---------- free_text ----------
 elif condition == "free_text":
-    # 显示景区概览（简洁）
     st.markdown(f"**📍 {current_poi['name']}**  \n{current_poi['info']}")
     st.divider()
 
-    # ========== 显示所有历史对话 ==========
-    for idx, turn in enumerate(st.session_state.conversation_history):
-        # 用户消息
+    # 显示历史对话
+    for turn in st.session_state.conversation_history:
         with st.chat_message("user"):
             st.markdown(turn["question"])
-        # AI 回复
         with st.chat_message("assistant"):
             st.markdown(turn["answer"])
             st.markdown(f"<div class='source-chip'>🔍 {turn['source']}</div>", unsafe_allow_html=True)
 
-    # ========== 如果存在推荐问题，显示在最新 AI 消息下方 ==========
+    # 显示推荐问题
     if st.session_state.followup_questions:
         st.markdown("**💡 您可能还想了解：**")
         cols = st.columns(3)
         for i, q in enumerate(st.session_state.followup_questions):
             with cols[i % 3]:
-                # 使用 st.button 并绑定点击事件
                 if st.button(f"❓ {q}", key=f"followup_{i}_{len(st.session_state.conversation_history)}"):
                     handle_question(q)
 
-    # ========== 底部固定输入框（DeepSeek 风格） ==========
+    # 底部输入框
     user_input = st.chat_input("请输入您的问题...", key="free_chat_input")
     if user_input and user_input.strip():
         handle_question(user_input.strip())
 
+# ---------- recchatbox ----------
 elif condition == "recchatbox":
-    # 保持原有的 recchatbox 逻辑（不改变）
+    # 确保 ai_response 存在（防御）
+    if "ai_response" not in st.session_state:
+        st.session_state.ai_response = None
+
     st.markdown(f"### 景区官方概览\n{current_poi['info']}")
     st.write("---")
     st.markdown("#### 💡 上下文智能化启发提问 (RecChatbox)")
     st.caption("根据您当前所处的历史空间情境，AI 为您推荐以下深度探究方向：")
+
     for rec_q in current_poi["recs"]:
         if st.button(f"✨ {rec_q}"):
             ans, src, chk, r_time = simulate_rag_engine(rec_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk, "clicked_q": rec_q}
             log_experimental_event(action_type="rec_clicked", query_text=rec_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
+
     user_q = st.text_input("或者，您也可以在此输入其他自由提问：", key="rec_txt")
     if st.button("提交自由问题", key="btn_rec"):
         if user_q:
             ans, src, chk, r_time = simulate_rag_engine(user_q)
             st.session_state.ai_response = {"ans": ans, "src": src, "chk": chk, "clicked_q": user_q}
             log_experimental_event(action_type="question_submitted", query_text=user_q, response_time=r_time, retrieved_chunks=chk, displayed_source_cue=src)
+
     if st.session_state.ai_response:
         st.markdown(f"<div class='qa-box'><b>AI 智能解答：</b><br>{st.session_state.ai_response['ans']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='source-chip'>🔍 权威数字证源：{st.session_state.ai_response['src']}</div>", unsafe_allow_html=True)
 
-# ==================== 底部完成按钮 ====================
+# ---------- 底部完成按钮 ----------
 st.write("---")
 if st.button("✅ 我已完成当前 POI 的阅读与交互"):
     log_experimental_event(action_type="completed")
