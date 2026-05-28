@@ -91,7 +91,7 @@ function speakText(text) {
     var utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
     utterance.rate = 0.9;
-    window.speechSynthesis.cancel(); // 避免重复朗读
+    window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
 }
 </script>
@@ -127,6 +127,7 @@ group_condition_map = {
 }
 condition_sequence = group_condition_map[st.session_state.group]
 
+# 当前 POI 索引
 if "current_poi_index" not in st.session_state:
     current_poi_key = st.query_params.get("poi", POI_ORDER[0])
     st.session_state.current_poi_index = POI_ORDER.index(current_poi_key) if current_poi_key in POI_ORDER else 0
@@ -138,11 +139,8 @@ else:
         st.session_state.followup_questions = []
         st.session_state.ai_response = None
         st.session_state.page_load_time = time.time()
-        # POI 切换时自动朗读新的简介
-        if actual_render != "baseline":
-            new_poi = poi_database[POI_ORDER[st.session_state.current_poi_index]]
-            st.markdown(f'<script>speakText("{new_poi["info"]}")</script>', unsafe_allow_html=True)
 
+# 必须先定义 actual_render 和 current_condition
 current_poi_key = POI_ORDER[st.session_state.current_poi_index]
 current_poi = poi_database[current_poi_key]
 current_condition = condition_sequence[st.session_state.current_poi_index]
@@ -157,7 +155,7 @@ else:
     actual_render = "recchatbox"
     display_condition_name = "智能推荐对话"
 
-# 其他 Session 状态
+# ==================== 其他 Session 状态 ====================
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "page_load_time" not in st.session_state:
@@ -176,7 +174,6 @@ if actual_render != "baseline" and not st.session_state.chat_messages:
         {"role": "assistant", "content": f"您好！欢迎来到【{current_poi['name']}】。您可以问我任何关于这个古迹的问题。"}
     ]
 
-# Supabase 客户端
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
