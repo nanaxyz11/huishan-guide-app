@@ -8,84 +8,33 @@ import re
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from supabase import create_client
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="expanded")
 
-# ==================== 新国潮电商风 CSS ====================
+# ==================== 新国潮电商风 CSS（已精简至核心） ====================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Noto+Serif+SC:wght@400;700&display=swap');
-    .stApp {
-        background: #F8F9F8;
-        font-family: 'Noto Serif SC', serif;
-    }
-    .main > div {
-        background-color: #ffffff;
-        border-radius: 8px;
-        padding: 1rem 1.5rem 1.5rem 1.5rem;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-        border: 0.5px solid #e2e2e2;
-    }
-    .poi-card {
-        background: #EAECE9;
-        border-left: 4px solid #E63946;
-        padding: 1rem 1.2rem;
-        border-radius: 4px;
-        margin: 1rem 0 1.5rem 0;
-        font-size: 0.95rem;
-        line-height: 1.5;
-        color: #4A4E51;
-        box-shadow: none;
-    }
-    .source-chip {
-        display: inline-block;
-        background-color: #f0f0f0;
-        color: #4A4E51;
-        padding: 2px 12px;
-        border-radius: 4px;
-        font-size: 0.7rem;
-        font-weight: 400;
-        margin-top: 8px;
-        font-family: 'Inter', sans-serif;
-    }
-    div.stButton > button {
-        background-color: #ffffff;
-        color: #E63946;
-        border: 1px solid #e2e2e2;
-        border-radius: 4px;
-        padding: 0.5rem 1.2rem;
-        font-weight: 400;
-        transition: 0.2s;
-        font-family: 'Inter', sans-serif;
-    }
-    div.stButton > button:hover {
-        background-color: #E63946;
-        color: white;
-        border-color: #E63946;
-    }
-    .stChatInput input {
-        border-radius: 4px;
-        border: 1px solid #e2e2e2;
-        background-color: #ffffff;
-    }
-    [data-testid="stSidebar"] {
-        background: #ffffff;
-        border-right: 0.5px solid #e2e2e2;
-        font-family: 'Inter', sans-serif;
-    }
+    .stApp { background: #F8F9F8; font-family: 'Noto Serif SC', serif; }
+    .main > div { background-color: #ffffff; border-radius: 8px; padding: 1rem 1.5rem 1.5rem 1.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.03); border: 0.5px solid #e2e2e2; }
+    .poi-card { background: #EAECE9; border-left: 4px solid #E63946; padding: 1rem 1.2rem; border-radius: 4px; margin: 1rem 0 1.5rem 0; font-size: 0.95rem; line-height: 1.5; color: #4A4E51; box-shadow: none; }
+    .source-chip { display: inline-block; background-color: #f0f0f0; color: #4A4E51; padding: 2px 12px; border-radius: 4px; font-size: 0.7rem; font-weight: 400; margin-top: 8px; font-family: 'Inter', sans-serif; }
+    div.stButton > button { background-color: #ffffff; color: #E63946; border: 1px solid #e2e2e2; border-radius: 4px; padding: 0.5rem 1.2rem; font-weight: 400; transition: 0.2s; font-family: 'Inter', sans-serif; }
+    div.stButton > button:hover { background-color: #E63946; color: white; border-color: #E63946; }
+    .stChatInput input { border-radius: 4px; border: 1px solid #e2e2e2; background-color: #ffffff; }
+    [data-testid="stSidebar"] { background: #ffffff; border-right: 0.5px solid #e2e2e2; font-family: 'Inter', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 注入语音合成 JS 函数 ====================
+# ==================== 注入语音合成 JS 函数（手动触发版） ====================
 st.markdown("""
 <script>
 function speakText(text) {
     if (!window.speechSynthesis) {
         console.warn("浏览器不支持语音合成");
+        alert("您的浏览器不支持语音合成功能");
         return;
     }
     var utterance = new SpeechSynthesisUtterance(text);
@@ -127,7 +76,6 @@ group_condition_map = {
 }
 condition_sequence = group_condition_map[st.session_state.group]
 
-# 当前 POI 索引
 if "current_poi_index" not in st.session_state:
     current_poi_key = st.query_params.get("poi", POI_ORDER[0])
     st.session_state.current_poi_index = POI_ORDER.index(current_poi_key) if current_poi_key in POI_ORDER else 0
@@ -140,7 +88,6 @@ else:
         st.session_state.ai_response = None
         st.session_state.page_load_time = time.time()
 
-# 必须先定义 actual_render 和 current_condition
 current_poi_key = POI_ORDER[st.session_state.current_poi_index]
 current_poi = poi_database[current_poi_key]
 current_condition = condition_sequence[st.session_state.current_poi_index]
@@ -166,20 +113,19 @@ if "followup_questions" not in st.session_state:
     st.session_state.followup_questions = []
 if "ai_response" not in st.session_state:
     st.session_state.ai_response = None
-if "has_read_intro" not in st.session_state:
-    st.session_state.has_read_intro = False
 
 if actual_render != "baseline" and not st.session_state.chat_messages:
     st.session_state.chat_messages = [
         {"role": "assistant", "content": f"您好！欢迎来到【{current_poi['name']}】。您可以问我任何关于这个古迹的问题。"}
     ]
 
+# Supabase 客户端初始化（务必提前在 Streamlit Secrets 中配置好 SUPABASE_URL 和 SUPABASE_KEY）
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志函数 ====================
+# ==================== 日志函数（带详细报错打印） ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     utc_time = datetime.now(timezone.utc)
@@ -204,30 +150,29 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     try:
         st.session_state.supabase.table("interaction_logs").insert(event_data, returning='minimal').execute()
     except Exception as e:
-        st.toast(f"⚠️ 数据同步失败，本地已备份: {str(e)[:100]}", icon="⚠️")
+        # 在页面上显示错误详情，方便你排查
+        st.toast(f"⚠️ 数据同步失败，本地已备份。Supabase 错误: {str(e)}", icon="⚠️")
 
-# 页面首次加载埋点 + 朗读简介
+# 页面首次加载埋点
 if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
     log_experimental_event("page_loaded")
-    if actual_render != "baseline" and not st.session_state.has_read_intro:
-        st.markdown(f'<script>speakText("{current_poi["info"]}")</script>', unsafe_allow_html=True)
-        st.session_state.has_read_intro = True
 
-# ==================== Dify RAG 函数 ====================
+# ==================== 优化后的 Dify RAG 函数 ====================
 def simulate_rag_engine(user_query):
     start = time.time()
     url = "https://api.dify.ai/v1/chat-messages"
     key = "Bearer app-rzITs8smrzMUhhdraDriLuRp"
+    # 确保将当前 POI 的详细资料作为上下文一起传入
     payload = {
-        "inputs": {"current_poi": current_poi["name"]},
+        "inputs": {"current_poi": current_poi["name"], "poi_info": current_poi["info"], "kb": str(current_poi.get("kb", []))},
         "query": user_query,
         "response_mode": "blocking",
         "user": st.session_state.participant_id
     }
     headers = {"Authorization": key, "Content-Type": "application/json"}
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        resp = requests.post(url, json=payload, headers=headers, timeout=20)  # 增加超时时间
         resp.raise_for_status()
         data = resp.json()
         ans = data.get("answer", "抱歉，无法回答。")
@@ -242,7 +187,9 @@ def simulate_rag_engine(user_query):
         return ans, src, chunks, elapsed
     except Exception as e:
         elapsed = time.time() - start
-        return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", elapsed
+        # 将详细的 API 错误显示在页面上，帮助你调试
+        st.error(f"Dify API 错误: {str(e)}")
+        return "【网络或服务异常】请检查您的 API Key 或网络设置。", "故障降级", "[Error]", elapsed
 
 def generate_followups_fallback():
     return [
@@ -274,7 +221,7 @@ def handle_question(question):
         st.session_state.chat_messages.append({"role": "user", "content": question})
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
         log_experimental_event("question_submitted", question, elapsed, chunks, src)
-        # 朗读 AI 回答
+        # 朗读 AI 回答（手动触发版）
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
         if actual_render == "recchatbox":
             st.session_state.followup_questions = generate_followup_questions(question, ans)
@@ -290,7 +237,6 @@ st.sidebar.markdown(f"**进度**：{st.session_state.current_poi_index+1}/{len(P
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🏮 游览路线")
 
-# 显示路线进度条和点位列表
 progress = (st.session_state.current_poi_index + 1) / len(POI_ORDER)
 st.sidebar.progress(progress)
 for idx, pid in enumerate(POI_ORDER):
@@ -318,8 +264,14 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 主界面渲染 ====================
-st.title(f"🏯 {current_poi['name']}")
+# ==================== 主界面渲染（语音手动触发版） ====================
+col1, col2 = st.columns([4, 1])
+with col1:
+    st.title(f"🏯 {current_poi['name']}")
+with col2:
+    if st.button("🔊 朗读介绍", key="speak_intro"):
+        st.markdown(f'<script>speakText("{current_poi["info"]}")</script>', unsafe_allow_html=True)
+
 st.markdown(f'<div class="poi-card">{current_poi["info"]}</div>', unsafe_allow_html=True)
 
 if actual_render == "baseline":
