@@ -4,6 +4,7 @@ import os
 import time
 import hashlib
 import random
+import re
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import requests
@@ -14,18 +15,19 @@ from supabase import create_client
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="expanded")
 
-# ==================== 更新 CSS ====================
+# ==================== 江南水墨风 CSS（融入江南园林色彩体系） ====================
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;600;900&display=swap');
     /* 全局江南水墨风 */
     .stApp {
-        background: linear-gradient(145deg, #fdfbf7 0%, #f9f5eb 100%);
-        font-family: 'Georgia', 'Songti SC', 'Source Serif Pro', serif;
+        background: linear-gradient(145deg, #fef7e8 0%, #f9f5eb 100%);
+        font-family: 'Noto Serif SC', 'Georgia', 'Songti SC', serif;
     }
     /* 主容器 */
     .main > div {
         background-color: rgba(255, 250, 240, 0.92);
-        border-radius: 0px 16px 16px 0px;
+        border-radius: 16px;
         padding: 1rem 1.5rem 1.5rem 1.5rem;
         box-shadow: 0 8px 20px rgba(0,0,0,0.06);
         border-left: 1px solid #e2d9cd;
@@ -42,7 +44,7 @@ st.markdown("""
         line-height: 1.6;
         color: #2c3e2f;
         box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-        font-family: 'Songti SC', serif;
+        font-family: 'Noto Serif SC', serif;
     }
     /* 来源标识 */
     .source-chip {
@@ -65,7 +67,7 @@ st.markdown("""
         padding: 0.5rem 1.2rem;
         font-weight: 500;
         transition: 0.2s;
-        font-family: 'Songti SC', serif;
+        font-family: 'Noto Serif SC', serif;
     }
     div.stButton > button:hover {
         background-color: #6b8c7c;
@@ -82,67 +84,36 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #fff8ef 0%, #fdf5e6 100%);
         border-right: 1px solid #ede3d5;
-        font-family: 'Songti SC', serif;
-    }
-    /* 侧边栏链接样式 */
-    .sidebar-poi-link {
-        display: block;
-        padding: 6px 12px;
-        margin: 4px 0;
-        border-radius: 20px;
-        background: transparent;
-        color: #6e5c44;
-        text-decoration: none;
-        transition: 0.2s;
-        cursor: pointer;
-        font-size: 0.9rem;
-    }
-    .sidebar-poi-link:hover, .sidebar-poi-link.active {
-        background: #e8dfd0;
-        color: #6b8c7c;
+        font-family: 'Noto Serif SC', serif;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 1. 加载POI数据（带错误处理） ====================
+# ==================== 加载 POI 数据（同原逻辑） ====================
 @st.cache_data
 def load_poi_data():
-    json_path = "data/poi_content.json"
-    if not os.path.exists(json_path):
-        st.error(f"❌ 找不到文件：{json_path}。请确保文件存在。")
-        st.stop()
-    with open(json_path, "r", encoding="utf-8") as f:
+    with open("data/poi_content.json", "r", encoding="utf-8") as f:
         content = f.read()
-        import re
         content = re.sub(r',\s*}', '}', content)
         content = re.sub(r',\s*]', ']', content)
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError as e:
-            st.error(f"JSON 解析错误：{e}\n请用 JSON 验证器检查文件格式。")
-            st.stop()
-    return data
+        return json.loads(content)
 
 poi_database = load_poi_data()
 expected_pois = ["fanwenzheng_gongci", "guhuashanmen", "bayinjian", "zhulu_shanfang", "erquan"]
-missing = [p for p in expected_pois if p not in poi_database]
-if missing:
-    st.error(f"❌ POI 数据库中缺少以下键：{missing}\n请检查 JSON 文件中的键名是否正确。")
-    st.stop()
-
-POI_ORDER = expected_pois
+POI_ORDER = [p for p in expected_pois if p in poi_database]
 POI_NAMES = {pid: poi_database[pid]["name"] for pid in POI_ORDER}
 
-# ==================== 2. URL参数与Session初始化 ====================
+# ==================== URL 参数与 Session 初始化 ====================
 if "participant_id" not in st.session_state:
     st.session_state.participant_id = st.query_params.get("pid", "P_TEST_USER")
+
+# 实验组别（A/B/C）分配
 if "group" not in st.session_state:
-    # 伪随机分组（A/B/C），结合pid确保稳定
     hash_val = int(hashlib.md5(st.session_state.participant_id.encode()).hexdigest()[:4], 16)
     group_map = ["A", "B", "C"]
     st.session_state.group = group_map[hash_val % 3]
 
-# 根据组别映射对应的条件顺序（5个POI依次使用不同条件）
+# 条件映射（5 个 POI 依次分配 A/B/C 条件）
 group_condition_map = {
     "A": ["baseline", "free_text", "recchatbox", "baseline", "free_text"],
     "B": ["free_text", "recchatbox", "baseline", "free_text", "recchatbox"],
@@ -150,18 +121,19 @@ group_condition_map = {
 }
 condition_sequence = group_condition_map[st.session_state.group]
 
-# 当前POI索引
+# 当前 POI 索引
 if "current_poi_index" not in st.session_state:
     current_poi_key = st.query_params.get("poi", POI_ORDER[0])
-    if current_poi_key in POI_ORDER:
-        st.session_state.current_poi_index = POI_ORDER.index(current_poi_key)
-    else:
-        st.session_state.current_poi_index = 0
+    st.session_state.current_poi_index = POI_ORDER.index(current_poi_key) if current_poi_key in POI_ORDER else 0
 else:
-    # 确保与URL同步
     url_poi = st.query_params.get("poi")
     if url_poi and url_poi in POI_ORDER and POI_ORDER.index(url_poi) != st.session_state.current_poi_index:
         st.session_state.current_poi_index = POI_ORDER.index(url_poi)
+        # POI 切换时重置聊天状态
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.ai_response = None
+        st.session_state.page_load_time = time.time()
 
 current_poi_key = POI_ORDER[st.session_state.current_poi_index]
 current_poi = poi_database[current_poi_key]
@@ -177,7 +149,7 @@ else:
     actual_render = "recchatbox"
     display_condition_name = "智能推荐对话"
 
-# ==================== 3. Session状态初始化 ====================
+# 其他 Session 状态
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "page_load_time" not in st.session_state:
@@ -186,24 +158,23 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 if "followup_questions" not in st.session_state:
     st.session_state.followup_questions = []
+if "ai_response" not in st.session_state:
+    st.session_state.ai_response = None
 if actual_render != "baseline" and not st.session_state.chat_messages:
     st.session_state.chat_messages = [
         {"role": "assistant", "content": f"您好！欢迎来到【{current_poi['name']}】。您可以问我任何关于这个古迹的问题。"}
     ]
 
+# Supabase 客户端
 if "supabase" not in st.session_state:
-    try:
-        supabase_url = st.secrets["SUPABASE_URL"]
-        supabase_key = st.secrets["SUPABASE_KEY"]
-        st.session_state.supabase = create_client(supabase_url, supabase_key)
-    except Exception as e:
-        st.error(f"Supabase 连接失败：{e}")
-        st.stop()
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_KEY"]
+    st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 4. 日志函数（修正时间戳） ====================
+# ==================== 日志函数（修复 Supabase 数据写入） ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
-    # 修正时间戳：使用UTC+8（北京时间）
+    # 使用 UTC+8（北京时间）修正时间戳偏差
     utc_time = datetime.now(timezone.utc)
     beijing_time = utc_time + timedelta(hours=8)
     event_data = {
@@ -224,26 +195,32 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     os.makedirs("logs", exist_ok=True)
     df.to_csv("logs/interaction_log.csv", index=False, encoding="utf-8-sig")
     try:
-        st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
+        # 关键修复：加 returning='minimal' 避免隐式 SELECT 触发 RLS 报错
+        st.session_state.supabase.table("interaction_logs").insert(event_data, returning='minimal').execute()
     except Exception as e:
         st.toast(f"⚠️ 数据同步失败，本地已备份: {str(e)[:100]}", icon="⚠️")
 
+# 页面首次加载埋点
 if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
     log_experimental_event("page_loaded")
 
-# ==================== 5. Dify RAG 函数（保持不变） ====================
+# ==================== Dify RAG 函数（优化推理速度） ====================
 def simulate_rag_engine(user_query):
     start = time.time()
     url = "https://api.dify.ai/v1/chat-messages"
+    # 主应用 API Key
     key = "Bearer app-rzITs8smrzMUhhdraDriLuRp"
-    payload = {"inputs": {"current_poi": current_poi["name"]}, "query": user_query, "response_mode": "blocking", "user": st.session_state.participant_id}
+    payload = {
+        "inputs": {"current_poi": current_poi["name"]},
+        "query": user_query,
+        "response_mode": "blocking",
+        "user": st.session_state.participant_id
+    }
     headers = {"Authorization": key, "Content-Type": "application/json"}
-    session = requests.Session()
-    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500,502,503,504])
-    session.mount("https://", HTTPAdapter(max_retries=retries))
+    # 移除多次重试，只做单次快速请求
     try:
-        resp = session.post(url, json=payload, headers=headers, timeout=15)
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         ans = data.get("answer", "抱歉，无法回答。")
@@ -256,24 +233,37 @@ def simulate_rag_engine(user_query):
             chunks = "[通用生成]"
         elapsed = time.time() - start
         return ans, src, chunks, elapsed
-    except Exception:
+    except Exception as e:
         elapsed = time.time() - start
         return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", elapsed
 
-def generate_followups(question, answer):
+# ==================== 生成推荐问题（修复仅显示两个的问题） ====================
+def generate_followups_fallback():
+    return [
+        f"关于{current_poi['name']}还有哪些值得一访的历史细节？",
+        f"这座建筑与无锡本地文化传统的关联体现在哪些方面？",
+        f"在您的日常游览中，最能引发好奇心的遗产元素是什么？"
+    ]
+
+def generate_followup_questions(user_question, ai_answer):
     url = "https://api.dify.ai/v1/chat-messages"
     key = "Bearer app-CCck7NxI8NLZIxf24Q247Hti"
-    prompt = f"用户问题：{question}\nAI回答：{answer}\n生成3个文化遗产相关的后续问题，每行一个。"
-    try:
-        resp = requests.post(url, json={"inputs":{},"query":prompt,"response_mode":"blocking","user":st.session_state.participant_id},
-                             headers={"Authorization":key,"Content-Type":"application/json"}, timeout=10)
-        lines = resp.json().get("answer","").strip().split("\n")[:3]
-        while len(lines) < 3:
-            lines.append("您还想了解更多吗？")
-        return [l.strip() for l in lines]
-    except Exception:
-        return ["这个景点还有什么故事？", "这里发生过什么重大事件？", "建筑风格有什么特别之处？"]
+    prompt = f"""用户问题：{user_question}
+AI回答：{ai_answer}
+请以 JSON 格式输出 3 个与文化遗产相关的后续问题，格式为 ["问题1", "问题2", "问题3"]，不要有其他解释。"""
 
+    try:
+        resp = requests.post(url, json={"inputs": {}, "query": prompt, "response_mode": "blocking", "user": st.session_state.participant_id}, headers={"Authorization": key, "Content-Type": "application/json"}, timeout=10)
+        answer = resp.json().get("answer", "[\"\"]")
+        match = re.search(r'\[.*\]', answer, re.DOTALL)
+        questions = json.loads(match.group(0)) if match else []
+        while len(questions) < 3:
+            questions.append("您还想了解更多关于这里的历史渊源吗？")
+        return questions[:3]
+    except Exception:
+        return generate_followups_fallback()
+
+# ==================== 处理用户提问 ====================
 def handle_question(question):
     with st.spinner("AI 导览员正在查阅史料..."):
         ans, src, chunks, elapsed = simulate_rag_engine(question)
@@ -281,12 +271,12 @@ def handle_question(question):
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
         log_experimental_event("question_submitted", question, elapsed, chunks, src)
         if actual_render == "recchatbox":
-            st.session_state.followup_questions = generate_followups(question, ans)
+            st.session_state.followup_questions = generate_followup_questions(question, ans)
         else:
             st.session_state.followup_questions = []
         st.rerun()
 
-# ==================== 6. 侧边栏（含手动切换） ====================
+# ==================== 侧边栏（支持手动切换点位） ====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
 st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
@@ -294,15 +284,17 @@ st.sidebar.markdown(f"**进度**：{st.session_state.current_poi_index+1}/{len(P
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🏮 游览路线")
 
-# 手动切换POI
 for idx, pid in enumerate(POI_ORDER):
     icon = "📍" if pid == current_poi_key else "▪️"
     poi_name = POI_NAMES[pid]
     if st.sidebar.button(f"{icon} {poi_name}", key=f"nav_{pid}"):
-        # 更新索引
         if idx != st.session_state.current_poi_index:
             st.session_state.current_poi_index = idx
-            # 更新URL参数（可选）
+            # 重置聊天状态，避免上一个点位的问题残留
+            st.session_state.chat_messages = []
+            st.session_state.followup_questions = []
+            st.session_state.ai_response = None
+            st.session_state.page_load_time = time.time()
             st.query_params["poi"] = pid
             st.query_params["pid"] = st.session_state.participant_id
             st.rerun()
@@ -313,7 +305,7 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 7. 主界面渲染 ====================
+# ==================== 主界面渲染 ====================
 st.title(f"🏯 {current_poi['name']}")
 st.markdown(f'<div class="poi-card">{current_poi["info"]}</div>', unsafe_allow_html=True)
 
@@ -340,11 +332,12 @@ current_idx = st.session_state.current_poi_index
 if current_idx + 1 < len(POI_ORDER):
     next_poi = POI_ORDER[current_idx + 1]
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
-        # 记录点位完成事件
         log_experimental_event("completed")
-        # 记录步行时间：上一站到下一站的间隔（下次计算时会用到）
-        st.session_state.last_completed_time = time.time()
         st.session_state.current_poi_index += 1
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.ai_response = None
+        st.session_state.page_load_time = time.time()
         st.query_params["poi"] = next_poi
         st.query_params["pid"] = st.session_state.participant_id
         st.rerun()
