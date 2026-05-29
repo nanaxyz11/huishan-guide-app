@@ -1,5 +1,3 @@
-以下是您所需的“惠山古镇 AI 导览员”网页美化后的完整代码。我们保留了所有原有功能（Dify机器人、聊天助手、Supabase数据交互等），仅对界面样式进行了全面升级，采用江南科技风玻璃态设计，使其更加现代、美观且富有沉浸感。
-```python
 import streamlit as st
 import json
 import os
@@ -15,339 +13,228 @@ from supabase import create_client
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="expanded")
 
-# ==================== 全新 Hue SkillC 江南科技风样式 ====================
+# ==================== 全新 Hue SkillC 风格 ====================
 st.markdown("""
 <style>
+/* ===== Hue SkillC: Jiangnan Tech 3A Streamlit ===== */
 :root {
-  --jn-bg-start: #dff8fb;
-  --jn-bg-end: #f8fff7;
-  --jn-glass: rgba(255, 255, 255, 0.72);
-  --jn-ink: #172326;
-  --jn-muted: #4e6b70;
-  --jn-blue: #128fff;
-  --jn-cyan: #6be7f2;
-  --jn-green: #38d6aa;
+  --jn-bg-1: #dff7fb;
+  --jn-bg-2: #f7fff8;
+  --jn-card: rgba(255, 255, 255, 0.82);
+  --jn-ink: #182426;
+  --jn-muted: #6f7f82;
+  --jn-blue: #1f8fff;
+  --jn-cyan: #62dce8;
+  --jn-green: #34d399;
   --jn-orange: #df7a2d;
   --jn-gold: #c99452;
-  --jn-line: rgba(18, 143, 255, 0.24);
-  --jn-radius-xl: 32px;
-  --jn-radius-md: 20px;
-  --jn-shadow: 0 20px 48px rgba(35, 118, 138, 0.16);
-  --jn-shadow-hover: 0 26px 56px rgba(18, 143, 255, 0.2);
+  --jn-line: rgba(31, 143, 255, 0.16);
 }
 
-/* 主容器背景与极光动效 */
 .stApp {
-  background: linear-gradient(180deg, var(--jn-bg-start) 0%, var(--jn-bg-end) 100%);
-  color: var(--jn-ink);
-  overflow-x: hidden;
-}
-
-.stApp::before {
-  content: "";
-  position: fixed;
-  inset: -20%;
-  z-index: -3;
   background:
-    radial-gradient(circle at 18% 18%, rgba(107, 231, 242, 0.58), transparent 38%),
-    radial-gradient(circle at 78% 22%, rgba(56, 214, 170, 0.38), transparent 36%),
-    radial-gradient(circle at 50% 82%, rgba(18, 143, 255, 0.24), transparent 44%);
-  filter: blur(48px);
-  animation: auroraFlow 22s ease-in-out infinite alternate;
-  pointer-events: none;
+    radial-gradient(circle at 12% 8%, rgba(98, 220, 232, .42), transparent 28%),
+    radial-gradient(circle at 85% 18%, rgba(52, 211, 153, .28), transparent 24%),
+    linear-gradient(180deg, var(--jn-bg-1) 0%, var(--jn-bg-2) 100%);
+  color: var(--jn-ink);
 }
 
-.stApp::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  opacity: 0.28;
-  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0.7px, transparent 0.7px);
-  background-size: 8px 8px;
-  pointer-events: none;
-}
-
-@keyframes auroraFlow {
-  0% { transform: translate3d(-2%, -1%, 0) scale(1); }
-  50% { transform: translate3d(3%, 2%, 0) scale(1.05); }
-  100% { transform: translate3d(-1%, 4%, 0) scale(1.02); }
-}
-
-/* 头部透明模糊 */
 [data-testid="stHeader"] {
-  background: rgba(223, 248, 251, 0.68);
-  backdrop-filter: blur(20px);
+  background: rgba(223, 247, 251, .72);
+  backdrop-filter: blur(14px);
 }
 
-/* 主容器宽度 */
 .block-container {
-  max-width: 1180px;
-  padding-top: 1.8rem;
-}
-
-/* 玻璃卡片基类 */
-.glass-card, 
-.jn-hero, 
-.jn-feature-card,
-.jn-poi-card,
-.jn-current-card {
-  position: relative;
-  background: var(--jn-glass);
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  border-radius: var(--jn-radius-xl);
-  backdrop-filter: blur(24px) saturate(1.4);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  box-shadow: var(--jn-shadow);
-  transition: all 0.3s cubic-bezier(0.2, 0, 0, 1);
-}
-
-.glass-card:hover,
-.jn-poi-card:hover,
-.jn-feature-card:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--jn-shadow-hover);
-  border-color: rgba(255, 255, 255, 0.9);
+  max-width: 1080px;
+  padding-top: 1.4rem;
 }
 
 /* Hero 区域 */
 .jn-hero {
-  min-height: 380px;
-  padding: 2.2rem 2.5rem;
-  margin-bottom: 1.8rem;
-  background: linear-gradient(112deg, rgba(10, 32, 36, 0.78), rgba(10, 32, 36, 0.22)),
-              url("https://images.unsplash.com/photo-1587560699334-bea2d8c0a7b1?auto=format&fit=crop&w=1600&q=80");
-  background-size: cover;
-  background-position: center 30%;
+  position: relative;
+  min-height: 260px;
+  border-radius: 28px;
   overflow: hidden;
+  padding: 28px;
+  background:
+    linear-gradient(90deg, rgba(10, 30, 36, .78), rgba(10, 30, 36, .18)),
+    url("https://images.unsplash.com/photo-1528181304800-259b08848526?auto=format&fit=crop&w=1400&q=80");
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 24px 60px rgba(25, 110, 130, .22);
+  margin-bottom: 20px;
 }
-
 .jn-hero::after {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(circle, rgba(107, 231, 242, 0.35) 0.8px, transparent 0.8px);
+  background-image: radial-gradient(circle, rgba(98,220,232,.45) 1px, transparent 1px);
   background-size: 18px 18px;
-  opacity: 0.26;
+  opacity: .18;
   pointer-events: none;
 }
-
 .jn-hero-title {
-  max-width: 720px;
-  font-size: clamp(44px, 8vw, 80px);
-  line-height: 1.05;
+  position: relative;
+  z-index: 1;
+  max-width: 620px;
+  font-size: 44px;
+  line-height: 1.08;
   font-weight: 900;
   color: white;
-  text-shadow: 0 8px 26px rgba(0, 0, 0, 0.36);
-  letter-spacing: -0.01em;
+  text-shadow: 0 4px 18px rgba(0,0,0,.32);
 }
-
-.jn-hero-title span {
-  color: #9ef3ff;
-}
-
+.jn-hero-title span { color: #8ff7ff; }
 .jn-hero-sub {
-  margin-top: 1rem;
-  max-width: 560px;
-  font-size: 1.05rem;
+  position: relative;
+  z-index: 1;
+  margin-top: 14px;
+  max-width: 520px;
+  font-size: 16px;
   line-height: 1.7;
-  color: rgba(255, 255, 255, 0.92);
-  font-weight: 500;
+  color: rgba(255,255,255,.86);
 }
 
-/* 快捷操作栏 */
-.jn-quick-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.8rem;
-  margin: 1.4rem 0 0.8rem;
+/* 搜索栏 */
+.jn-search {
+  margin-top: -28px;
+  position: relative;
+  z-index: 3;
+  background: rgba(255,255,255,.86);
+  border: 1px solid var(--jn-line);
+  border-radius: 999px;
+  padding: 14px 20px;
+  box-shadow: 0 16px 38px rgba(43, 140, 160, .16);
+  margin-bottom: 24px;
+  color: var(--jn-muted);
 }
 
-.jn-quick-chip {
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  border-radius: 80px;
-  padding: 0.4rem 1.2rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: white;
-  transition: 0.2s;
-  cursor: default;
-}
-
-/* 特色网格 */
-.jn-feature-grid {
+/* 功能宫格 */
+.jn-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 1.25rem;
-  margin: 2rem 0;
+  gap: 14px;
+  margin-bottom: 24px;
 }
-
-.jn-feature-card {
-  padding: 1.5rem 1rem;
+.jn-feature {
+  background: var(--jn-card);
+  border: 1px solid rgba(255,255,255,.72);
+  border-radius: 22px;
+  padding: 18px 12px;
   text-align: center;
+  box-shadow: 0 14px 32px rgba(50, 120, 130, .12);
+  backdrop-filter: blur(18px);
 }
-
-.jn-feature-icon {
-  width: 52px;
-  height: 52px;
-  margin: 0 auto 0.9rem;
+.jn-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 10px;
+  border-radius: 16px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, rgba(18, 143, 255, 0.18), rgba(56, 214, 170, 0.2));
-  border-radius: 24px;
-  font-size: 1.8rem;
-  color: #128fff;
-}
-
-.jn-feature-title {
-  font-weight: 800;
-  font-size: 1.05rem;
-  margin-bottom: 0.3rem;
-}
-
-.jn-feature-text {
-  color: var(--jn-muted);
-  font-size: 0.8rem;
-  line-height: 1.5;
-}
-
-/* POI 列表卡片 */
-.jn-poi-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  margin: 1.8rem 0;
-}
-
-.jn-poi-card {
-  display: grid;
-  grid-template-columns: 100px 1fr;
-  gap: 1.2rem;
-  padding: 1.2rem;
-  align-items: center;
-}
-
-.jn-poi-emoji {
-  font-size: 3.2rem;
-  text-align: center;
-  background: rgba(18, 143, 255, 0.08);
-  border-radius: 28px;
-  padding: 0.6rem 0;
-}
-
-.jn-poi-title {
-  font-size: 1.35rem;
-  font-weight: 800;
-  letter-spacing: -0.3px;
-  margin-bottom: 0.3rem;
-}
-
-.jn-poi-desc {
-  color: var(--jn-muted);
-  font-size: 0.88rem;
-  line-height: 1.55;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-/* 当前点位卡片 */
-.jn-current-card {
-  padding: 1.6rem;
-  margin: 1.2rem 0;
-}
-
-.jn-current-kicker {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  background: linear-gradient(135deg, rgba(31,143,255,.16), rgba(52,211,153,.18));
   color: var(--jn-blue);
   font-weight: 800;
 }
+.jn-feature-title { font-size: 14px; font-weight: 700; }
 
-.jn-current-title {
-  font-size: 1.7rem;
-  font-weight: 900;
-  margin: 0.4rem 0 0.6rem;
-}
-
-.jn-current-text {
-  color: var(--jn-muted);
-  line-height: 1.7;
-}
-
-/* 聊天与按钮美化 */
-div.stButton > button {
-  border-radius: 60px;
-  background: linear-gradient(105deg, rgba(18, 143, 255, 0.12), rgba(56, 214, 170, 0.1));
-  border: 1px solid var(--jn-line);
-  color: #116dbb;
-  font-weight: 700;
-  transition: all 0.2s;
-  box-shadow: 0 6px 14px rgba(18, 143, 255, 0.08);
-}
-
-div.stButton > button:hover {
-  transform: translateY(-2px);
-  background: rgba(18, 143, 255, 0.2);
-  border-color: #128fff;
-  box-shadow: 0 14px 28px rgba(18, 143, 255, 0.2);
-}
-
-[data-testid="stChatMessage"] {
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(12px);
+/* 内容卡片 */
+.jn-card {
+  background: var(--jn-card);
+  border: 1px solid rgba(255,255,255,.76);
   border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  padding: 0.8rem 1.2rem;
-  margin-bottom: 0.8rem;
+  padding: 20px;
+  box-shadow: 0 16px 40px rgba(45, 120, 138, .13);
+  backdrop-filter: blur(18px);
+  margin-bottom: 20px;
+}
+.jn-section-title {
+  font-size: 22px;
+  font-weight: 900;
+  margin: 6px 0 12px;
+}
+.jn-chip {
+  display: inline-block;
+  padding: 6px 12px;
+  margin: 0 8px 8px 0;
+  border-radius: 999px;
+  background: rgba(31,143,255,.10);
+  color: #126fbf;
+  border: 1px solid rgba(31,143,255,.18);
+  font-size: 13px;
+  font-weight: 700;
 }
 
-[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
-  margin-bottom: 0;
+/* POI 卡片 */
+.jn-poi {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 16px;
+  align-items: center;
+}
+.jn-poi-img {
+  height: 104px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #c7f5ff, #f6e2c7);
+}
+.jn-poi-name { font-size: 18px; font-weight: 900; }
+.jn-poi-desc { margin-top: 6px; color: var(--jn-muted); line-height: 1.65; }
+
+/* 按钮样式 */
+div.stButton > button {
+  background: linear-gradient(135deg, var(--jn-blue), var(--jn-green));
+  color: white;
+  border: none;
+  border-radius: 999px;
+  padding: .75rem 1.35rem;
+  font-weight: 800;
+  box-shadow: 0 12px 26px rgba(31,143,255,.24);
+  transition: all 0.2s;
+}
+div.stButton > button:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+/* 语音专用按钮 */
+.voice-btn {
+  background: #ffffffcc;
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--jn-line);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+  font-size: 0.9rem;
+}
+.voice-btn:hover {
+  background: var(--jn-orange);
+  color: white;
+  border-color: var(--jn-orange);
 }
 
+/* 输入框 */
+.stTextInput input, .stTextArea textarea {
+  background: rgba(255,255,255,.86);
+  border: 1px solid rgba(31,143,255,.18);
+  border-radius: 16px;
+}
+
+/* 侧边栏 */
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(232,250,252,.86));
+  border-right: 1px solid rgba(31,143,255,.12);
+}
+
+/* 来源chip */
 .source-chip {
   display: inline-block;
-  background: rgba(18, 143, 255, 0.12);
-  color: #0f6ba8;
-  padding: 0.2rem 0.8rem;
-  border-radius: 36px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  margin-top: 0.5rem;
-}
-
-/* 侧边栏玻璃化 */
-[data-testid="stSidebar"] {
-  background: rgba(255, 255, 255, 0.68);
-  backdrop-filter: blur(28px);
-  border-right: 1px solid var(--jn-line);
-}
-
-/* 输入框美化 */
-.stTextInput input, .stTextArea textarea {
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(18, 143, 255, 0.25);
-  border-radius: 28px;
-  padding: 0.6rem 1rem;
-}
-
-/* 进度条圆润 */
-[data-testid="stProgress"] > div {
-  background-color: rgba(18, 143, 255, 0.2);
+  background-color: rgba(31,143,255,0.12);
+  color: #1f8fff;
+  padding: 4px 12px;
   border-radius: 20px;
-}
-
-/* 移动端适配 */
-@media (max-width: 760px) {
-  .jn-feature-grid { grid-template-columns: repeat(2, 1fr); gap: 1rem; }
-  .jn-poi-card { grid-template-columns: 1fr; text-align: center; }
-  .jn-poi-emoji { font-size: 2.8rem; }
-  .jn-hero { padding: 1.6rem; min-height: 280px; }
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-top: 8px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -355,9 +242,24 @@ div.stButton > button:hover {
 # ==================== 语音 JS（增强版） ====================
 st.markdown("""
 <script>
+// 确保语音合成可用，并在首次点击时激活
+window.speechSynthesisPolyfill = function() {
+    if (!window.speechSynthesis) {
+        alert("您的浏览器不支持语音合成");
+        return false;
+    }
+    // 预热：请求一个空的语音对象，部分浏览器需要用户首次交互后才能初始化
+    var dummy = new SpeechSynthesisUtterance("");
+    window.speechSynthesis.cancel();
+    return true;
+};
+
 window.speakText = function(text) {
-    if (!window.speechSynthesis) return;
-    const utterance = new SpeechSynthesisUtterance(text);
+    if (!window.speechSynthesis) {
+        alert("您的浏览器不支持语音合成");
+        return;
+    }
+    var utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
     utterance.rate = 0.9;
     window.speechSynthesis.cancel();
@@ -384,10 +286,12 @@ POI_NAMES = {pid: poi_database[pid]["name"] for pid in POI_ORDER}
 if "participant_id" not in st.session_state:
     st.session_state.participant_id = st.query_params.get("pid", "P_TEST_USER")
 
+# 优先读取 URL 中的 group 参数（用于 Qualtrics 直接分发）
 url_group = st.query_params.get("group")
 if url_group in ["A", "B", "C"]:
     st.session_state.group = url_group
 else:
+    # 否则基于 pid 哈希分配
     if "group" not in st.session_state:
         hash_val = int(hashlib.md5(st.session_state.participant_id.encode()).hexdigest()[:4], 16)
         group_map = ["A", "B", "C"]
@@ -449,7 +353,7 @@ if "supabase" not in st.session_state:
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志函数 ====================
+# ==================== 日志函数（稳定写入） ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     query_length = len(query_text) if query_text else 0
@@ -476,11 +380,12 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
     except Exception as e:
         st.error(f"⚠️ Supabase 写入失败: {e}")
 
+# 页面首次加载埋点
 if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
     log_experimental_event("page_loaded")
 
-# ==================== Dify RAG 函数 ====================
+# ==================== Dify RAG 函数（优化） ====================
 def simulate_rag_engine(user_query):
     start = time.time()
     url = "https://api.dify.ai/v1/chat-messages"
@@ -538,17 +443,20 @@ AI回答：{ai_answer}
 def handle_question(question):
     with st.spinner("AI 导览员正在查阅史料..."):
         ans, src, chunks, elapsed = simulate_rag_engine(question)
+        # 确保问题与回答被记录
         st.session_state.chat_messages.append({"role": "user", "content": question})
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
         log_experimental_event("question_submitted", question, elapsed, chunks, src)
+        # 朗读回答
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
         if actual_render == "recchatbox":
             st.session_state.followup_questions = generate_followup_questions(question, ans)
         else:
             st.session_state.followup_questions = []
+        # 强制刷新以立即显示新消息（无需 rerun 也可以）
         st.rerun()
 
-# ==================== 侧边栏 (保持不变, 仅样式由CSS美化) ====================
+# ==================== 侧边栏 ====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
 st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
@@ -583,100 +491,59 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 主界面美化布局 (保留全部后端逻辑) ====================
-
+# ==================== 主界面渲染（全新 Hue SkillC 布局） ====================
 # Hero 区
 st.markdown(f"""
 <div class="jn-hero">
-  <div class="jn-hero-title">惠山古镇<br><span>AI 导览员</span></div>
+  <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
   <div class="jn-hero-sub">
-    面向 3A 实验的江南科技风导览 · 以真实点位、文化知识库与智能问答构成轻盈、可探索的游览体验。
-  </div>
-  <div class="jn-quick-actions">
-    <div class="jn-quick-chip">🎫 预约入园</div>
-    <div class="jn-quick-chip">💬 问AI</div>
-    <div class="jn-quick-chip">📅 活动日历</div>
-    <div class="jn-quick-chip">🏛️ 历史名迹</div>
+    融合 3A 智能问答、文化知识库与语音导览，呈现江南文脉的轻量化数字体验。
   </div>
 </div>
-""", unsafe_allow_html=True)
-
-# 功能宫格
-st.markdown("""
-<div class="jn-feature-grid">
-  <div class="jn-feature-card">
-    <div class="jn-feature-icon">✨</div>
-    <div class="jn-feature-title">智能问答</div>
-    <div class="jn-feature-text">围绕五个POI进行文化遗产问答</div>
-  </div>
-  <div class="jn-feature-card">
-    <div class="jn-feature-icon">🎤</div>
-    <div class="jn-feature-title">语音导览</div>
-    <div class="jn-feature-text">支持点位介绍朗读与沉浸式聆听</div>
-  </div>
-  <div class="jn-feature-card">
-    <div class="jn-feature-icon">🗺️</div>
-    <div class="jn-feature-title">点位切换</div>
-    <div class="jn-feature-text">沿左侧路线探索五处文化节点</div>
-  </div>
-  <div class="jn-feature-card">
-    <div class="jn-feature-icon">📊</div>
-    <div class="jn-feature-title">实验记录</div>
-    <div class="jn-feature-text">记录停留、提问与回答行为数据</div>
-  </div>
+<div class="jn-search">🔍 搜索景点、历史人物、非遗故事或推荐路线</div>
+<div class="jn-grid">
+  <div class="jn-feature"><div class="jn-icon">AI</div><div class="jn-feature-title">智能问答</div></div>
+  <div class="jn-feature"><div class="jn-icon">泉</div><div class="jn-feature-title">二泉导览</div></div>
+  <div class="jn-feature"><div class="jn-icon">祠</div><div class="jn-feature-title">名人祠堂</div></div>
+  <div class="jn-feature"><div class="jn-icon">游</div><div class="jn-feature-title">路线推荐</div></div>
 </div>
-""", unsafe_allow_html=True)
-
-# 所有POI展示卡片（保留原数据库内容）
-st.markdown('<div class="jn-poi-list">', unsafe_allow_html=True)
-for pid in POI_ORDER:
-    poi = poi_database[pid]
-    # 为每个点位选择对应emoji
-    emoji_map = {
-        "fanwenzheng_gongci": "🏛️",
-        "guhuashanmen": "⛩️",
-        "bayinjian": "🎋",
-        "zhulu_shanfang": "🍵",
-        "erquan": "💧"
-    }
-    emoji = emoji_map.get(pid, "🏯")
-    st.markdown(f"""
-    <div class="jn-poi-card">
-        <div class="jn-poi-emoji">{emoji}</div>
-        <div>
-            <div class="jn-poi-title">{poi['name']}</div>
-            <div class="jn-poi-desc">{poi['info'][:140]}…</div>
-        </div>
+<div class="jn-card">
+  <div class="jn-section-title">今日推荐</div>
+  <span class="jn-chip">天下第二泉</span>
+  <span class="jn-chip">寄畅园</span>
+  <span class="jn-chip">范文正公祠</span>
+  <span class="jn-chip">竹炉山房</span>
+  <div class="jn-poi">
+    <div class="jn-poi-img"></div>
+    <div>
+      <div class="jn-poi-name">{current_poi['name']}</div>
+      <div class="jn-poi-desc">{current_poi['info'][:120]}…</div>
     </div>
-    """, unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# 当前点位详情卡片
-st.markdown(f"""
-<div class="jn-current-card">
-    <div class="jn-current-kicker">📍 当前所在点位</div>
-    <div class="jn-current-title">{current_poi['name']}</div>
-    <div class="jn-current-text">{current_poi['info']}</div>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
-# 语音按钮 (美化)
+# 详细 POI 卡片（保留原有内容）
+st.markdown(f'<div class="jn-card" style="margin-top:12px;"><b>📜 当前点位详情</b><br>{current_poi["info"]}</div>', unsafe_allow_html=True)
+
+# 语音按钮（美化版）
 voice_col, _ = st.columns([1, 5])
 with voice_col:
     if st.button("🔊 朗读介绍", key="speak_intro", help="点击聆听景点介绍"):
-        safe_info = current_poi["info"].replace('"', '\\"')
-        st.markdown(f'<script>speakText("{safe_info}")</script>', unsafe_allow_html=True)
+        st.markdown(f'<script>speakText("{current_poi["info"]}")</script>', unsafe_allow_html=True)
 
-# 聊天界面 (完全保留原有逻辑)
+# 聊天界面
 if actual_render == "baseline":
     st.caption("✨ 静态展示模式 · 无 AI 对话")
 else:
+    # 显示历史消息
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and "source" in msg:
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
     
+    # 推荐问题（仅 recchatbox）
     if actual_render == "recchatbox" and st.session_state.followup_questions:
         st.markdown("#### 💬 相关问题推荐")
         cols = st.columns(3)
@@ -685,6 +552,7 @@ else:
                 if st.button(f"❓ {q}", key=f"followup_{i}"):
                     handle_question(q)
     
+    # 输入框
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt)
 
