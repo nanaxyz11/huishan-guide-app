@@ -5,7 +5,7 @@ import time
 import hashlib
 import random
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 import pandas as pd
 import requests
 from supabase import create_client
@@ -13,7 +13,7 @@ from supabase import create_client
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="expanded")
 
-# ==================== 新国潮电商风 CSS（已精简至核心） ====================
+# ==================== CSS ====================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Noto+Serif+SC:wght@400;700&display=swap');
@@ -28,7 +28,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 注入语音合成 JS 函数（手动触发版） ====================
+# ==================== 语音 JS ====================
 st.markdown("""
 <script>
 function speakText(text) {
@@ -60,7 +60,7 @@ expected_pois = ["fanwenzheng_gongci", "guhuashanmen", "bayinjian", "zhulu_shanf
 POI_ORDER = [p for p in expected_pois if p in poi_database]
 POI_NAMES = {pid: poi_database[pid]["name"] for pid in POI_ORDER}
 
-# ==================== URL 参数与 Session 初始化 ====================
+# ==================== URL 参数与 Session ====================
 if "participant_id" not in st.session_state:
     st.session_state.participant_id = st.query_params.get("pid", "P_TEST_USER")
 
@@ -119,17 +119,17 @@ if actual_render != "baseline" and not st.session_state.chat_messages:
         {"role": "assistant", "content": f"您好！欢迎来到【{current_poi['name']}】。您可以问我任何关于这个古迹的问题。"}
     ]
 
-# Supabase 客户端初始化（务必提前在 Streamlit Secrets 中配置好 SUPABASE_URL 和 SUPABASE_KEY）
+# Supabase 客户端
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志函数（带详细报错打印） ====================
+# ==================== 日志函数（完全沿用旧版稳定写法） ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
-    utc_time = datetime.now(timezone.utc)
-    beijing_time = utc_time + timedelta(hours=8)
+    query_length = len(query_text) if query_text else 0
+
     event_data = {
         "participant_id": str(st.session_state.participant_id),
         "experimental_condition": current_condition,
@@ -137,42 +137,40 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
         "action_type": str(action_type),
         "time_on_page_seconds": round(time_on_page, 2),
         "user_query_text": str(query_text),
-        "user_query_word_count": len(query_text),
+        "user_query_word_count": query_length,
         "rag_response_time_ms": round(response_time * 1000, 1),
         "retrieved_chunks_saved": str(retrieved_chunks),
         "displayed_source_cue": str(displayed_source_cue),
-        "timestamp": beijing_time.isoformat()
+        "timestamp": datetime.now().isoformat()
     }
     st.session_state.logs.append(event_data)
     df = pd.DataFrame(st.session_state.logs)
     os.makedirs("logs", exist_ok=True)
     df.to_csv("logs/interaction_log.csv", index=False, encoding="utf-8-sig")
     try:
-        st.session_state.supabase.table("interaction_logs").insert(event_data, returning='minimal').execute()
+        st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
     except Exception as e:
-        # 在页面上显示错误详情，方便你排查
-        st.toast(f"⚠️ 数据同步失败，本地已备份。Supabase 错误: {str(e)}", icon="⚠️")
+        st.error(f"⚠️ Supabase 写入失败: {e}")
 
 # 页面首次加载埋点
 if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
     log_experimental_event("page_loaded")
 
-# ==================== 优化后的 Dify RAG 函数 ====================
+# ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query):
     start = time.time()
     url = "https://api.dify.ai/v1/chat-messages"
     key = "Bearer app-rzITs8smrzMUhhdraDriLuRp"
-    # 确保将当前 POI 的详细资料作为上下文一起传入
     payload = {
-        "inputs": {"current_poi": current_poi["name"], "poi_info": current_poi["info"], "kb": str(current_poi.get("kb", []))},
+        "inputs": {"current_poi": current_poi["name"]},
         "query": user_query,
         "response_mode": "blocking",
         "user": st.session_state.participant_id
     }
     headers = {"Authorization": key, "Content-Type": "application/json"}
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=20)  # 增加超时时间
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         ans = data.get("answer", "抱歉，无法回答。")
@@ -187,9 +185,8 @@ def simulate_rag_engine(user_query):
         return ans, src, chunks, elapsed
     except Exception as e:
         elapsed = time.time() - start
-        # 将详细的 API 错误显示在页面上，帮助你调试
         st.error(f"Dify API 错误: {str(e)}")
-        return "【网络或服务异常】请检查您的 API Key 或网络设置。", "故障降级", "[Error]", elapsed
+        return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", elapsed
 
 def generate_followups_fallback():
     return [
@@ -221,15 +218,14 @@ def handle_question(question):
         st.session_state.chat_messages.append({"role": "user", "content": question})
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
         log_experimental_event("question_submitted", question, elapsed, chunks, src)
-        # 朗读 AI 回答（手动触发版）
+        # 朗读回答
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
         if actual_render == "recchatbox":
             st.session_state.followup_questions = generate_followup_questions(question, ans)
         else:
             st.session_state.followup_questions = []
-        st.rerun()
 
-# ==================== 侧边栏（含手动切换和路线进度） ====================
+# ==================== 侧边栏 ====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
 st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
@@ -264,7 +260,7 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 主界面渲染（语音手动触发版） ====================
+# ==================== 主界面渲染 ====================
 col1, col2 = st.columns([4, 1])
 with col1:
     st.title(f"🏯 {current_poi['name']}")
