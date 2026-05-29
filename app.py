@@ -64,7 +64,7 @@ ROUTE_ALIASES = {
     "惠山泉": "erquan",
 }
 
-# ==================== CSS + JS（全新 Hue SkillC + 视差 + 骨架屏 + Masonry） ====================
+# ==================== CSS + JS ====================
 st.markdown(f"""
 <style>
 :root {{
@@ -308,10 +308,15 @@ if "supabase" not in st.session_state:
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志函数 ====================
+# ==================== 日志函数（修改后） ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     query_length = len(query_text) if query_text else 0
+
+    # 限制 retrieved_chunks 的长度（避免超过 Supabase 字段限制）
+    MAX_CHUNKS_LEN = 2000
+    if len(retrieved_chunks) > MAX_CHUNKS_LEN:
+        retrieved_chunks = retrieved_chunks[:MAX_CHUNKS_LEN] + "... (truncated)"
 
     event_data = {
         "participant_id": str(st.session_state.participant_id),
@@ -326,14 +331,19 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
         "displayed_source_cue": str(displayed_source_cue),
         "timestamp": datetime.now().isoformat()
     }
+    
+    # 保存到本地 CSV（不受 Supabase 影响）
     st.session_state.logs.append(event_data)
     df = pd.DataFrame(st.session_state.logs)
     os.makedirs("logs", exist_ok=True)
     df.to_csv("logs/interaction_log.csv", index=False, encoding="utf-8-sig")
+    
+    # 尝试上传到 Supabase，但忽略 WebSocket 错误（仅警告）
     try:
         st.session_state.supabase.table("interaction_logs").insert(event_data).execute()
     except Exception as e:
-        st.error(f"⚠️ Supabase 写入失败: {e}")
+        # 仅打印警告，不中断程序
+        st.warning(f"Supabase 日志上传失败（本地已保存）: {e}")
 
 if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
@@ -394,7 +404,7 @@ AI回答：{ai_answer}
     except Exception:
         return generate_followups_fallback()
 
-# ==================== 处理用户提问（含骨架屏） ====================
+# ==================== 处理用户提问 ====================
 def handle_question(question):
     skeleton = st.empty()
     skeleton.markdown("""
@@ -430,7 +440,7 @@ def jump_to_poi(pid):
     st.toast(f"已为你定位到：{POI_NAMES[pid]}", icon="⌖")
     st.rerun()
 
-# ==================== 侧边栏（改进图标 + 进度条） ====================
+# ==================== 侧边栏 ====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
 st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
@@ -467,7 +477,7 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 主界面渲染（全新布局） ====================
+# ==================== 主界面渲染 ====================
 # Hero 区
 st.markdown("""
 <div class="jn-hero reveal">
@@ -537,7 +547,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# POI 卡片列表（5个）
+# POI 卡片列表
 st.markdown('<div class="jn-poi-list reveal">', unsafe_allow_html=True)
 for pid in POI_ORDER:
     poi = poi_database[pid]
