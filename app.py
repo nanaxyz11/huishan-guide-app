@@ -17,36 +17,59 @@ st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", lay
 
 # ==================== 辅助函数：图片转 Base64（用于背景） ====================
 def get_img_base64(img_path):
-    """读取本地图片并转为 Base64 字符串"""
+    """读取本地图片并转为 Base64 字符串，支持相对路径和绝对路径"""
     try:
+        # 尝试原始路径
         if os.path.exists(img_path):
             with open(img_path, "rb") as f:
                 data = f.read()
             return base64.b64encode(data).decode()
-        else:
-            return ""
+        # 尝试相对路径（当前目录下的 images/ 文件夹）
+        rel_path = os.path.join("images", os.path.basename(img_path))
+        if os.path.exists(rel_path):
+            with open(rel_path, "rb") as f:
+                data = f.read()
+            return base64.b64encode(data).decode()
+        return ""
     except Exception:
         return ""
 
-# ==================== 实时天气获取函数 ====================
-def get_weather():
-    """获取无锡实时天气和温度 (使用 wttr.in 免费 API)"""
+def get_image_path_or_fallback(img_path, fallback_url="https://picsum.photos/300/200?grayscale"):
+    """返回可用的图片路径或网络URL，用于 st.image"""
+    if os.path.exists(img_path):
+        return img_path
+    rel_path = os.path.join("images", os.path.basename(img_path))
+    if os.path.exists(rel_path):
+        return rel_path
+    return fallback_url
+
+# ==================== 实时天气 + 舒适度 + 人流量 ====================
+def get_weather_and_comfort():
+    """获取无锡实时天气、温度，计算舒适度，人流量写为舒适"""
     try:
-        # 使用 wttr.in 获取无锡当前天气 (简洁格式: 天气图标+温度)
         url = "https://wttr.in/Wuxi?format=%C+%t&lang=zh"
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
             weather_text = response.text.strip()
-            # 示例输出: "多云 +18°C"
-            # 美化显示
-            return f"🌤️ {weather_text}"
+            # 解析温度，示例 "多云 +18°C"
+            temp_match = re.search(r'([+-]?\d+)°C', weather_text)
+            temp = int(temp_match.group(1)) if temp_match else 18
+            # 舒适度判定
+            if 15 <= temp <= 25:
+                comfort = "舒适"
+            elif temp < 10 or temp > 30:
+                comfort = "较不适"
+            else:
+                comfort = "一般"
+            # 人流量固定舒适
+            crowd = "舒适"
+            return f"{weather_text} · 舒适度：{comfort} · 人流量：{crowd}"
         else:
-            return "🌡️ 惠山古镇 18°C"
+            return "多云 18°C · 舒适度：舒适 · 人流量：舒适"
     except Exception:
-        # 降级显示模拟天气（实际可保留为静态，不影响体验）
-        return "🌤️ 惠山古镇 16°C · 适宜游览"
+        return "多云 16°C · 舒适度：舒适 · 人流量：舒适"
 
-# ==================== 全新 Hue SkillC 风格（美化版） ====================
+# ==================== 全新 Hue SkillC 风格（美化版，调整了间距与横向滚动） ====================
 st.markdown("""
 <style>
 /* ===== Hue SkillC: Jiangnan Tech 3A Streamlit ===== */
@@ -82,7 +105,7 @@ st.markdown("""
   padding-top: 1.4rem;
 }
 
-/* Hero 区域 (背景图片已通过内联样式替换) */
+/* Hero 区域 */
 .jn-hero {
   position: relative;
   min-height: 260px;
@@ -124,9 +147,9 @@ st.markdown("""
   color: rgba(255,255,255,.86);
 }
 
-/* 实时天气栏 (替换搜索框) */
+/* 实时天气栏 - 增加间距 */
 .jn-weather-bar {
-  margin-top: -28px;
+  margin-top: 12px;  /* 原来 -28px 改为此值，与主图拉开距离 */
   position: relative;
   z-index: 3;
   background: rgba(255,255,255,.86);
@@ -139,41 +162,12 @@ st.markdown("""
   font-weight: 600;
   backdrop-filter: blur(8px);
   text-align: center;
-  font-size: 1.1rem;
+  font-size: 1rem;
 }
 .jn-weather-bar i {
   font-style: normal;
   margin-right: 6px;
 }
-
-/* 功能宫格 */
-.jn-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-  margin-bottom: 24px;
-}
-.jn-feature {
-  background: var(--jn-card);
-  border: 1px solid rgba(255,255,255,.72);
-  border-radius: 22px;
-  padding: 18px 12px;
-  text-align: center;
-  box-shadow: 0 14px 32px rgba(50, 120, 130, .12);
-  backdrop-filter: blur(18px);
-}
-.jn-icon {
-  width: 44px;
-  height: 44px;
-  margin: 0 auto 10px;
-  border-radius: 16px;
-  display: grid;
-  place-items: center;
-  background: linear-gradient(135deg, rgba(31,143,255,.16), rgba(52,211,153,.18));
-  color: var(--jn-blue);
-  font-weight: 800;
-}
-.jn-feature-title { font-size: 14px; font-weight: 700; }
 
 /* 内容卡片 */
 .jn-card {
@@ -191,17 +185,18 @@ st.markdown("""
   margin: 6px 0 12px;
 }
 
-/* 推荐图片卡片样式 */
+/* 推荐图片卡片样式 - 横向滚动（手机同一行） */
 .recommend-grid {
   display: flex;
-  flex-wrap: wrap;
+  overflow-x: auto;
   gap: 16px;
   margin-top: 12px;
-  justify-content: space-between;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 8px;
 }
 .recommend-item {
-  flex: 1;
-  min-width: 100px;
+  flex: 0 0 auto;
+  width: 130px;          /* 手机上一行显示5个需要滚动，固定宽度 */
   background: rgba(255,255,255,0.5);
   border-radius: 24px;
   padding: 12px 8px;
@@ -209,6 +204,7 @@ st.markdown("""
   transition: all 0.2s;
   backdrop-filter: blur(4px);
   border: 1px solid rgba(255,255,255,0.6);
+  scroll-snap-align: start;
 }
 .recommend-item:hover {
   transform: translateY(-4px);
@@ -237,9 +233,6 @@ st.markdown("""
   font-weight: 600;
   color: #126fbf;
 }
-
-/* POI 卡片 */
-.jn-poi-desc { margin-top: 6px; color: var(--jn-muted); line-height: 1.65; }
 
 /* 按钮样式 */
 div.stButton > button {
@@ -301,7 +294,7 @@ div.stButton > button:hover {
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 语音 JS（增强版） ====================
+# ==================== 语音 JS（保持不变） ====================
 st.markdown("""
 <script>
 window.speechSynthesisPolyfill = function() {
@@ -328,7 +321,7 @@ window.speakText = function(text) {
 </script>
 """, unsafe_allow_html=True)
 
-# ==================== 加载 POI 数据 ====================
+# ==================== 加载 POI 数据（不变） ====================
 @st.cache_data
 def load_poi_data():
     with open("data/poi_content.json", "r", encoding="utf-8") as f:
@@ -342,7 +335,7 @@ expected_pois = ["fanwenzheng_gongci", "guhuashanmen", "bayinjian", "zhulu_shanf
 POI_ORDER = [p for p in expected_pois if p in poi_database]
 POI_NAMES = {pid: poi_database[pid]["name"] for pid in POI_ORDER}
 
-# ==================== URL 参数与 Session ====================
+# ==================== URL 参数与 Session（不变） ====================
 if "participant_id" not in st.session_state:
     st.session_state.participant_id = st.query_params.get("pid", "P_TEST_USER")
 
@@ -388,7 +381,7 @@ else:
     actual_render = "recchatbox"
     display_condition_name = "智能推荐对话"
 
-# ==================== 其他 Session 状态 ====================
+# ==================== 其他 Session 状态（不变） ====================
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "page_load_time" not in st.session_state:
@@ -411,7 +404,7 @@ if "supabase" not in st.session_state:
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志函数（稳定写入） ====================
+# ==================== 日志函数（不变） ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     query_length = len(query_text) if query_text else 0
@@ -442,7 +435,7 @@ if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
     log_experimental_event("page_loaded")
 
-# ==================== Dify RAG 函数（优化） ====================
+# ==================== Dify RAG 函数（不变） ====================
 def simulate_rag_engine(user_query):
     start = time.time()
     url = "https://api.dify.ai/v1/chat-messages"
@@ -510,7 +503,7 @@ def handle_question(question):
             st.session_state.followup_questions = []
         st.rerun()
 
-# ==================== 侧边栏 ====================
+# ==================== 侧边栏（不变） ====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
 st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
@@ -545,15 +538,15 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 主界面渲染（美化改造版） ====================
-# 1. 主图背景替换为本地 "主图.jpg"
-main_img_path = "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/主图.jpg"
-main_img_b64 = get_img_base64(main_img_path)
+# ==================== 主界面渲染（美化改造版，已移除功能宫格，调整天气栏与横向滚动） ====================
+# 1. 主图背景（支持相对路径 images/主图.jpg 或网络占位）
+main_img_local = "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/主图.jpg"
+main_img_b64 = get_img_base64(main_img_local)
 if main_img_b64:
     hero_bg_style = f"background-image: linear-gradient(90deg, rgba(10, 30, 36, .68), rgba(10, 30, 36, .28)), url('data:image/jpg;base64,{main_img_b64}');"
 else:
-    # 降级（如果图片不存在，保持原渐变）
-    hero_bg_style = "background-image: linear-gradient(90deg, rgba(10,30,36,.78), rgba(10,30,36,.18)), url('https://images.unsplash.com/photo-1528181304800-259b08848526?auto=format&fit=crop&w=1400&q=80');"
+    # 使用网络占位图（惠山古镇相关图片）
+    hero_bg_style = "background-image: linear-gradient(90deg, rgba(10,30,36,.78), rgba(10,30,36,.18)), url('https://images.unsplash.com/photo-1594568284297-7c64464062b1?auto=format&fit=crop&w=1400&q=80');"
 
 st.markdown(f"""
 <div class="jn-hero" style="{hero_bg_style}">
@@ -564,61 +557,48 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 2. 实时天气温度显示 (替换原来的搜索框)
-weather_info = get_weather()
+# 2. 实时天气栏（包含舒适度 + 人流量）
+weather_display = get_weather_and_comfort()
 st.markdown(f"""
 <div class="jn-weather-bar">
-  🌸 惠山古镇 · {weather_info}
+  🌸 惠山古镇 · {weather_display}
 </div>
 """, unsafe_allow_html=True)
 
-# 3. 功能宫格
-st.markdown("""
-<div class="jn-grid">
-  <div class="jn-feature"><div class="jn-icon">AI</div><div class="jn-feature-title">智能问答</div></div>
-  <div class="jn-feature"><div class="jn-icon">泉</div><div class="jn-feature-title">二泉导览</div></div>
-  <div class="jn-feature"><div class="jn-icon">祠</div><div class="jn-feature-title">名人祠堂</div></div>
-  <div class="jn-feature"><div class="jn-icon">游</div><div class="jn-feature-title">路线推荐</div></div>
-</div>
-""", unsafe_allow_html=True)
+# 3. 功能宫格 - 已完全移除（不再显示）
 
-# 4. 今日推荐区域：图片化卡片（天下第二泉、古华山门、知鱼栏、竹炉山房、范文正公祠）
-# 定义推荐列表: (显示名称, 对应POI ID, 图片路径)
+# 4. 今日推荐区域：图片化卡片（横向滚动，手机同一行）
 recommend_pois = [
-    ("天下第二泉", "erquan", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/二泉.jpg"),
-    ("古华山门", "guhuashanmen", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/金莲桥.jpg"),
-    ("知鱼栏", "bayinjian", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/知鱼栏.jpg"),
-    ("竹炉山房", "zhulu_shanfang", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/竹炉山房.jpg"),
-    ("范文正公祠", "fanwenzheng_gongci", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/范文公正祠.jpg")
+    ("天下第二泉", "erquan", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/二泉.jpg", "https://picsum.photos/id/104/300/200"),
+    ("古华山门", "guhuashanmen", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/金莲桥.jpg", "https://picsum.photos/id/20/300/200"),
+    ("知鱼栏", "bayinjian", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/知鱼栏.jpg", "https://picsum.photos/id/96/300/200"),
+    ("竹炉山房", "zhulu_shanfang", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/竹炉山房.jpg", "https://picsum.photos/id/30/300/200"),
+    ("范文正公祠", "fanwenzheng_gongci", "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图/范文公正祠.jpg", "https://picsum.photos/id/119/300/200")
 ]
 
 st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div><div class="recommend-grid">', unsafe_allow_html=True)
-cols = st.columns(len(recommend_pois))
-for idx, (name, poi_id, img_path) in enumerate(recommend_pois):
-    with cols[idx]:
-        # 显示图片
-        if os.path.exists(img_path):
-            st.image(img_path, use_column_width=True, output_format="JPEG")
+for idx, (name, poi_id, local_path, fallback_url) in enumerate(recommend_pois):
+    # 获取可用图片路径
+    img_path = get_image_path_or_fallback(local_path, fallback_url)
+    # 每个卡片单独一个容器，在HTML里用display: inline-block 代替 st.columns
+    st.markdown('<div class="recommend-item">', unsafe_allow_html=True)
+    st.image(img_path, use_column_width="auto", output_format="JPEG")
+    st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
+    if st.button("✨ 探寻", key=f"rec_btn_{idx}"):
+        if poi_id in POI_ORDER:
+            new_index = POI_ORDER.index(poi_id)
+            if new_index != st.session_state.current_poi_index:
+                st.session_state.current_poi_index = new_index
+                st.session_state.chat_messages = []
+                st.session_state.followup_questions = []
+                st.session_state.ai_response = None
+                st.session_state.page_load_time = time.time()
+                st.query_params["poi"] = poi_id
+                st.query_params["pid"] = st.session_state.participant_id
+                st.rerun()
         else:
-            # 占位图
-            st.markdown(f'<div class="recommend-img" style="background:#e2e8f0; display:flex; align-items:center; justify-content:center;">📷</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
-        # 点击跳转按钮
-        if st.button("✨ 探寻", key=f"rec_btn_{idx}"):
-            # 跳转到对应 POI 点位
-            if poi_id in POI_ORDER:
-                new_index = POI_ORDER.index(poi_id)
-                if new_index != st.session_state.current_poi_index:
-                    st.session_state.current_poi_index = new_index
-                    st.session_state.chat_messages = []
-                    st.session_state.followup_questions = []
-                    st.session_state.ai_response = None
-                    st.session_state.page_load_time = time.time()
-                    st.query_params["poi"] = poi_id
-                    st.query_params["pid"] = st.session_state.participant_id
-                    st.rerun()
-            else:
-                st.warning("该点位暂未开放")
+            st.warning("该点位暂未开放")
+    st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('</div></div>', unsafe_allow_html=True)
 
 # 5. 当前点位详情卡片（保留原有内容风格）
