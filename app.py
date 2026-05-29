@@ -17,20 +17,20 @@ from supabase import create_client
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="expanded")
 
-# ==================== 本地图片资源 Base64 处理 ====================
+# ==================== 图片资源 base64 处理 ====================
 ASSET_DIR = Path(__file__).resolve().parent / "惠山古镇5POI图"
 
 def asset_uri(filename):
-    """将本地图片转为 base64 内嵌，避免路径问题"""
     path = ASSET_DIR / filename
+    if not path.exists():
+        # 如果图片不存在，返回一个占位图（透明）
+        return "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23f0f4f8'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23999'%3E暂无图片%3C/text%3E%3C/svg%3E"
     mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
     data = base64.b64encode(path.read_bytes()).decode("utf-8")
     return f"data:{mime};base64,{data}"
 
-# 英雄区背景（主图）
-HERO_BG = asset_uri("主图.jpg")
+HERO_IMAGE = asset_uri("主图.jpg")
 
-# 5个POI的图片（放在每个POI介绍旁）
 POI_IMAGES = {
     "fanwenzheng_gongci": asset_uri("范文公正祠.jpg"),
     "guhuashanmen": asset_uri("金莲桥.jpg"),
@@ -39,253 +39,301 @@ POI_IMAGES = {
     "erquan": asset_uri("二泉1.jpg"),
 }
 
-# Masonry 网格图片（8张）
-MASONRY_IMAGES = [
-    ("范文正公祠", asset_uri("范文公正祠.jpg")),
-    ("金莲桥", asset_uri("金莲桥.jpg")),
-    ("八音涧", asset_uri("八音涧.jpg")),
-    ("知鱼槛", asset_uri("知鱼栏.jpg")),
-    ("竹炉山房", asset_uri("竹炉山房.jpg")),
-    ("天下第二泉", asset_uri("二泉1.jpg")),
-    ("二泉水景", asset_uri("二泉2.jpg")),
-    ("二泉石刻", asset_uri("二泉3.jpg")),
-]
-
-# ==================== 路线别名（原功能保留） ====================
-ROUTE_ALIASES = {
-    "范文正公祠": "fanwenzheng_gongci",
-    "范文公正祠": "fanwenzheng_gongci",
-    "范仲淹": "fanwenzheng_gongci",
-    "古华山门": "guhuashanmen",
-    "金莲桥": "guhuashanmen",
-    "八音涧": "bayinjian",
-    "知鱼槛": "bayinjian",
-    "知鱼栏": "bayinjian",
-    "寄畅园": "bayinjian",
-    "竹炉山房": "zhulu_shanfang",
-    "竹炉": "zhulu_shanfang",
-    "天下第二泉": "erquan",
-    "二泉": "erquan",
-    "惠山泉": "erquan",
-}
-
-# ==================== 全新视觉样式（玻璃态 + 动态 Aurora + Masonry + 视差 + Reveal + 跑马灯） ====================
+# ==================== 全新 Jiangnan Tech 风格（Glassmorphism + Aurora + Reveal） ====================
 st.markdown(f"""
 <style>
 /* ---------- 全局变量 ---------- */
 :root {{
-  --jn-blue:#1f8fff; --jn-cyan:#62dce8; --jn-green:#34d399;
-  --jn-orange:#df7a2d; --jn-ink:#172326; --jn-muted:#6f7f82;
-  --jn-glass:rgba(255,255,255,.64); --jn-line:rgba(31,143,255,.22);
-  --jn-radius:24px; --parallax-y:0px;
+  --jn-bg-1: #dff7fb;
+  --jn-bg-2: #f7fff8;
+  --jn-card: rgba(255, 255, 255, 0.72);
+  --jn-ink: #182426;
+  --jn-muted: #5b6e72;
+  --jn-blue: #1f8fff;
+  --jn-cyan: #62dce8;
+  --jn-green: #34d399;
+  --jn-orange: #df7a2d;
+  --jn-gold: #c99452;
+  --jn-line: rgba(31, 143, 255, 0.28);
 }}
+
+/* ---------- 动态 Aurora 背景 + 流动 ---------- */
 .stApp {{
-  color:var(--jn-ink);
-  background:linear-gradient(180deg,#dff8fb 0%,#f8fff8 100%);
-  overflow-x:hidden;
+  background: linear-gradient(180deg, var(--jn-bg-1) 0%, var(--jn-bg-2) 100%);
+  color: var(--jn-ink);
+  position: relative;
+  overflow-x: hidden;
 }}
-/* 动态 Aurora 背景层 */
+
 .stApp::before {{
-  content:""; position:fixed; inset:-20%; z-index:-3;
-  background:
-    radial-gradient(circle at 18% 20%,rgba(98,220,232,.52),transparent 28%),
-    radial-gradient(circle at 74% 18%,rgba(52,211,153,.38),transparent 26%),
-    radial-gradient(circle at 52% 78%,rgba(31,143,255,.22),transparent 32%);
-  filter:blur(28px); animation:auroraFlow 18s ease-in-out infinite alternate;
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -2;
+  background: 
+    radial-gradient(circle at 22% 30%, rgba(98, 220, 232, 0.52), transparent 38%),
+    radial-gradient(circle at 78% 20%, rgba(52, 211, 153, 0.44), transparent 42%),
+    radial-gradient(circle at 45% 70%, rgba(31, 143, 255, 0.28), transparent 48%);
+  filter: blur(60px);
+  animation: auroraFlow 16s ease-in-out infinite alternate;
+  pointer-events: none;
 }}
+
 @keyframes auroraFlow {{
-  0% {{ transform:translate3d(-2%,-1%,0) scale(1); }}
-  50% {{ transform:translate3d(3%,2%,0) scale(1.08); }}
-  100% {{ transform:translate3d(-1%,4%,0) scale(1.03); }}
+  0% {{ transform: translate3d(-2%, -1%, 0) scale(1); opacity: 0.7; }}
+  50% {{ transform: translate3d(4%, 2%, 0) scale(1.12); opacity: 1; }}
+  100% {{ transform: translate3d(-1%, 3%, 0) scale(0.98); opacity: 0.8; }}
 }}
-/* 噪点纹理 + 视差背景 */
+
+/* 白色噪点纹理 */
 .stApp::after {{
-  content:""; position:fixed; inset:-8%; z-index:-2;
-  transform:translateY(calc(var(--parallax-y) * .5));
-  background-image:radial-gradient(circle,rgba(255,255,255,.34) 1px,transparent 1px);
-  background-size:18px 18px; opacity:.45; pointer-events:none;
-}}
-[data-testid="stHeader"] {{ background:rgba(223,247,251,.62); backdrop-filter:blur(18px); }}
-.block-container {{ max-width:1160px; padding-top:1.2rem; }}
-
-/* 玻璃态卡片通用样式（强模糊 + 噪点） */
-.jn-glass, .jn-bento-card, .jn-poi-card, .jn-masonry-item {{
-  position:relative; background:var(--jn-glass); border:1px solid rgba(255,255,255,.7);
-  border-radius:var(--jn-radius); box-shadow:0 18px 46px rgba(35,118,138,.14);
-  backdrop-filter:blur(26px) saturate(1.3); overflow:hidden;
-}}
-/* 噪点叠加 */
-.jn-glass::after, .jn-bento-card::after, .jn-poi-card::after {{
-  content:""; position:absolute; inset:0; opacity:.16; pointer-events:none;
-  background-image:radial-gradient(circle,rgba(255,255,255,.9) .7px,transparent .7px);
-  background-size:7px 7px;
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.6) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.22;
+  pointer-events: none;
 }}
 
-/* 英雄区（加大高度，内部放置四个功能按钮） */
-.jn-hero {{
-  position:relative; min-height:480px; border-radius:34px; padding:34px; overflow:hidden;
-  background:linear-gradient(90deg,rgba(5,22,26,.78),rgba(5,22,26,.22) 62%,rgba(5,22,26,.08)), url("{HERO_BG}");
-  background-size:cover; background-position:center; box-shadow:0 30px 80px rgba(13,96,120,.24);
-}}
-.jn-hero-title {{
-  max-width:720px; font-size:clamp(40px,7vw,76px); line-height:1.02;
-  font-weight:950; color:white; text-shadow:0 8px 26px rgba(0,0,0,.36);
-}}
-.jn-hero-title span {{ color:#8ff7ff; }}
-.jn-hero-sub {{ margin-top:16px; max-width:560px; color:rgba(255,255,255,.88); font-size:17px; line-height:1.8; }}
-/* 四个透明按钮置于 Hero 底部 */
-.jn-hero-actions {{
-  position:absolute; left:26px; right:26px; bottom:24px;
-  display:grid; grid-template-columns:repeat(4,1fr); gap:12px;
-}}
-.jn-hero-action {{
-  display:flex; align-items:center; justify-content:center; gap:9px; min-height:58px;
-  border:1px solid rgba(255,255,255,.48); border-radius:20px;
-  background:rgba(255,255,255,.12); color:white; font-weight:800;
-  backdrop-filter:blur(18px); transition:.22s ease; cursor:pointer;
-}}
-.jn-hero-action:hover {{
-  transform:translateY(-3px) scale(1.025); box-shadow:0 20px 44px rgba(20,98,118,.22);
-  background:rgba(255,255,255,.24);
+/* ---------- Glass morphism 强化 ---------- */
+.jn-card, .jn-poi-card, .jn-hero-actions > div, .stButton > button, .stTextInput input, .stTextArea textarea, [data-testid="stSidebar"] {{
+  backdrop-filter: blur(18px) saturate(180%);
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 18px 42px rgba(45, 90, 100, 0.12);
 }}
 
-/* 搜索表单（放在 Hero 下方） */
-.jn-route-form {{ margin:18px 0 22px; padding:18px; }}
-
-/* Bento 网格（保留但微调） */
-.jn-bento {{ display:grid; grid-template-columns:repeat(6,1fr); gap:16px; margin:18px 0; }}
-.jn-bento-card {{ min-height:148px; padding:22px; transition:.22s ease; }}
-.jn-bento-large {{ grid-column:span 3; min-height:220px; }}
-.jn-bento-wide {{ grid-column:span 2; }}
-.jn-bento-small {{ grid-column:span 1; }}
-.jn-bento-kicker {{ color:var(--jn-blue); font-size:13px; font-weight:900; }}
-.jn-bento-title {{ margin-top:8px; font-size:24px; font-weight:950; }}
-.jn-bento-text {{ margin-top:10px; color:var(--jn-muted); line-height:1.65; }}
-
-/* POI 列表（每个 POI 展示图片 + 文字） */
-.jn-poi-list {{ display:grid; gap:16px; }}
-.jn-poi-card {{
-  display:grid; grid-template-columns:minmax(180px,28%) 1fr; gap:20px; padding:16px;
+/* 加强高斯模糊的卡片背景 */
+.jn-card, .jn-poi-card {{
+  background: rgba(255, 255, 255, 0.58);
+  backdrop-filter: blur(24px) saturate(200%);
+  border-radius: 32px;
+  padding: 20px;
+  margin-bottom: 24px;
+  transition: transform 0.2s, box-shadow 0.2s;
 }}
-.jn-poi-card img {{ width:100%; height:178px; object-fit:cover; border-radius:18px; }}
-.jn-poi-title {{ font-size:22px; font-weight:950; }}
-.jn-poi-desc {{ color:var(--jn-muted); line-height:1.72; }}
 
-/* Masonry 图片网格（自适应列数） */
-.jn-masonry {{ columns:3 240px; column-gap:16px; margin-top:16px; }}
-.jn-masonry-item {{ display:inline-block; width:100%; margin:0 0 16px; }}
-.jn-masonry-item img {{ width:100%; display:block; border-radius:22px; }}
-.jn-masonry-caption {{ padding:12px 14px 14px; font-weight:800; }}
-
-/* Skeleton 骨架屏 */
-.jn-skeleton {{
-  height:110px; border-radius:22px;
-  background:linear-gradient(90deg,rgba(255,255,255,.45),rgba(255,255,255,.82),rgba(255,255,255,.45));
-  background-size:220% 100%; animation:skeletonMove 1.25s infinite linear;
-  border:1px solid rgba(255,255,255,.7);
+/* ---------- Reveal on Scroll 动画 ---------- */
+.reveal {{
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.1), transform 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }}
-@keyframes skeletonMove {{ from {{ background-position:220% 0; }} to {{ background-position:-220% 0; }} }}
-
-/* Reveal 动画 */
-.reveal {{ opacity:0; transform:translateY(22px); transition:opacity .7s ease,transform .7s ease; }}
-.reveal.is-visible {{ opacity:1; transform:translateY(0); }}
-
-/* 跑马灯（无限滚动） */
-.jn-marquee {{
-  margin:28px 0 12px; overflow:hidden; border-radius:999px;
-  border:1px solid var(--jn-line); background:rgba(255,255,255,.56); backdrop-filter:blur(22px);
+.reveal.visible {{
+  opacity: 1;
+  transform: translateY(0);
 }}
-.jn-marquee-track {{ display:flex; width:max-content; gap:12px; padding:12px; animation:marquee 24s linear infinite; }}
-.jn-marquee:hover .jn-marquee-track {{ animation-play-state:paused; }}
-.jn-logo {{ padding:8px 16px; border-radius:999px; background:rgba(31,143,255,.1); color:#126fbf; font-weight:900; white-space:nowrap; }}
-@keyframes marquee {{ to {{ transform:translateX(-50%); }} }}
 
-/* 按钮通用样式 */
-div.stButton > button {{
-  border-radius:999px; border:1px solid var(--jn-line); background:rgba(255,255,255,.34);
-  color:#126fbf; font-weight:850; transition:.2s ease; box-shadow:0 10px 24px rgba(31,143,255,.10);
-}}
-div.stButton > button:hover {{
-  transform:translateY(-2px) scale(1.018); box-shadow:0 16px 34px rgba(31,143,255,.20);
-}}
-/* 侧边栏透明按钮（左侧5个POI按钮） */
+/* ---------- 侧边栏 POI 按钮透明底边框 ---------- */
 [data-testid="stSidebar"] .stButton button {{
-  background:transparent !important;
-  border:1px solid var(--jn-blue) !important;
-  color:var(--jn-blue) !important;
-  box-shadow:none !important;
+  background: transparent !important;
+  border: 1px solid var(--jn-blue) !important;
+  color: var(--jn-blue) !important;
+  font-weight: 600;
+  box-shadow: none !important;
+  transition: all 0.2s;
 }}
 [data-testid="stSidebar"] .stButton button:hover {{
-  background:rgba(31,143,255,.12) !important;
-  transform:translateX(4px);
+  background: rgba(31, 143, 255, 0.12) !important;
+  transform: translateX(4px);
 }}
-[data-testid="stSidebar"] {{
-  background:rgba(255,255,255,.56); backdrop-filter:blur(28px); border-right:1px solid var(--jn-line);
+
+/* ---------- Hero 区域（主图加大，内含四个按钮） ---------- */
+.jn-hero {{
+  position: relative;
+  min-height: 520px;
+  border-radius: 36px;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(10, 30, 36, 0.62), rgba(10, 30, 36, 0.22)), url("{HERO_IMAGE}");
+  background-size: cover;
+  background-position: center 30%;
+  margin-bottom: 28px;
+  box-shadow: 0 28px 56px rgba(25, 80, 90, 0.28);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 28px 32px 24px 32px;
 }}
+
+.jn-hero-title {{
+  font-size: 56px;
+  font-weight: 950;
+  line-height: 1.08;
+  color: white;
+  text-shadow: 0 6px 20px rgba(0,0,0,0.32);
+  margin-bottom: 8px;
+}}
+.jn-hero-title span {{
+  color: #9efff0;
+}}
+.jn-hero-sub {{
+  font-size: 17px;
+  color: rgba(255,255,255,0.9);
+  max-width: 560px;
+  margin-bottom: 28px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}}
+
+/* 四个按钮容器（置于主图内部下方） */
+.jn-hero-actions {{
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-top: 12px;
+}}
+
+.jn-hero-action {{
+  background: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 60px;
+  padding: 12px 0;
+  text-align: center;
+  font-weight: 800;
+  font-size: 1rem;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}}
+.jn-hero-action:hover {{
+  background: rgba(255, 255, 255, 0.38);
+  transform: translateY(-3px);
+  border-color: white;
+}}
+
+/* 搜索栏（移到主图下方独立区域） */
+.jn-search {{
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px);
+  border-radius: 60px;
+  padding: 8px 20px;
+  margin: 12px 0 28px 0;
+  border: 1px solid rgba(255,255,255,0.9);
+  font-size: 15px;
+  color: var(--jn-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+.jn-search::before {{
+  content: "🔍";
+  font-size: 18px;
+}}
+
+/* POI 卡片网格（五张带图） */
+.jn-poi-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 24px;
+  margin: 24px 0;
+}}
+.jn-poi-card {{
+  display: flex;
+  flex-direction: column;
+  background: rgba(255,255,255,0.6);
+  backdrop-filter: blur(20px);
+  border-radius: 28px;
+  overflow: hidden;
+  transition: all 0.25s;
+}}
+.jn-poi-card:hover {{
+  transform: translateY(-6px);
+  box-shadow: 0 28px 44px rgba(0,0,0,0.12);
+}}
+.jn-poi-img {{
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  border-bottom: 1px solid rgba(255,255,255,0.6);
+}}
+.jn-poi-content {{
+  padding: 18px;
+}}
+.jn-poi-name {{
+  font-size: 22px;
+  font-weight: 900;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}}
+.jn-poi-desc {{
+  color: var(--jn-muted);
+  line-height: 1.65;
+  font-size: 14px;
+}}
+
+/* 骨架屏 */
+.jn-skeleton {{
+  background: linear-gradient(110deg, rgba(255,255,255,0.5) 8%, rgba(255,255,255,0.9) 18%, rgba(255,255,255,0.5) 33%);
+  background-size: 200% 100%;
+  animation: skeletonWave 1.2s linear infinite;
+  border-radius: 20px;
+  margin-bottom: 12px;
+}}
+@keyframes skeletonWave {{
+  to { background-position: -200% 0; }
+}}
+
+/* 来源 chip */
 .source-chip {{
-  display:inline-block; background:rgba(31,143,255,.12); color:#126fbf;
-  padding:4px 12px; border-radius:999px; font-size:.72rem; font-weight:800; margin-top:8px;
+  display: inline-block;
+  background: rgba(31,143,255,0.18);
+  color: #1f6fb0;
+  padding: 4px 12px;
+  border-radius: 40px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-top: 10px;
 }}
-@media (max-width:760px) {{
-  .jn-hero {{ min-height:560px; padding:24px; }}
-  .jn-hero-actions {{ grid-template-columns:repeat(2,1fr); }}
-  .jn-bento {{ grid-template-columns:1fr; }}
-  .jn-bento-card,.jn-bento-large,.jn-bento-wide,.jn-bento-small {{ grid-column:span 1; }}
-  .jn-poi-card {{ grid-template-columns:1fr; }}
+
+/* 响应式 */
+@media (max-width: 720px) {{
+  .jn-hero-actions {{
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }}
+  .jn-hero-title {{
+    font-size: 36px;
+  }}
+  .jn-poi-grid {{
+    grid-template-columns: 1fr;
+  }}
 }}
 </style>
 
 <script>
-// 视差滚动
-function initParallax() {{
-  const root = document.documentElement;
-  window.addEventListener("scroll", () => {{
-    root.style.setProperty("--parallax-y", `${{window.scrollY * 0.5}}px`);
-  }}, {{ passive:true }});
-}}
-
-// Reveal on scroll
-function initReveal() {{
+// Reveal on Scroll
+document.addEventListener("DOMContentLoaded", function() {{
   const observer = new IntersectionObserver((entries) => {{
     entries.forEach(entry => {{
-      if (entry.isIntersecting) entry.target.classList.add("is-visible");
+      if (entry.isIntersecting) {{
+        entry.target.classList.add("visible");
+      }}
     }});
-  }}, {{ threshold:.12 }});
+  }}, {{ threshold: 0.12 }});
   document.querySelectorAll(".reveal").forEach(el => observer.observe(el));
-}}
+}});
 
-// 语音朗读（保持不变）
+// 语音合成（与原有保持一致）
 window.speakText = function(text) {{
   if (!window.speechSynthesis) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "zh-CN";
-  utterance.rate = .9;
+  utterance.rate = 0.9;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
 }};
-
-// 功能按钮交互：问AI滚动到聊天区
-function scrollToChat() {{
-  const chatInput = document.querySelector('div[data-testid="stChatInput"] textarea');
-  if (chatInput) {{
-    chatInput.scrollIntoView({{ behavior: "smooth", block: "center" }});
-    chatInput.focus();
-  }} else {{
-    alert("请先开始对话");
-  }}
-}}
-function showComingSoon() {{
-  alert("功能开发中，敬请期待");
-}}
-
-setTimeout(() => {{
-  initParallax();
-  initReveal();
-}}, 400);
 </script>
 """, unsafe_allow_html=True)
 
-# ==================== 加载 POI 数据 ====================
+# ==================== 加载 POI 数据（不变）====================
 @st.cache_data
 def load_poi_data():
     with open("data/poi_content.json", "r", encoding="utf-8") as f:
@@ -299,7 +347,7 @@ expected_pois = ["fanwenzheng_gongci", "guhuashanmen", "bayinjian", "zhulu_shanf
 POI_ORDER = [p for p in expected_pois if p in poi_database]
 POI_NAMES = {pid: poi_database[pid]["name"] for pid in POI_ORDER}
 
-# ==================== URL 参数与 Session ====================
+# ==================== URL 参数与 Session（不变）====================
 if "participant_id" not in st.session_state:
     st.session_state.participant_id = st.query_params.get("pid", "P_TEST_USER")
 
@@ -345,7 +393,7 @@ else:
     actual_render = "recchatbox"
     display_condition_name = "智能推荐对话"
 
-# ==================== 其他 Session 状态 ====================
+# ==================== 其他 Session 状态（不变）====================
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "page_load_time" not in st.session_state:
@@ -362,13 +410,13 @@ if actual_render != "baseline" and not st.session_state.chat_messages:
         {"role": "assistant", "content": f"您好！欢迎来到【{current_poi['name']}】。您可以问我任何关于这个古迹的问题。"}
     ]
 
-# Supabase 客户端
+# Supabase 客户端（不变）
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# ==================== 日志函数 ====================
+# ==================== 日志函数（不变）====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
     query_length = len(query_text) if query_text else 0
@@ -399,7 +447,7 @@ if f"loaded_{current_poi_key}" not in st.session_state:
     st.session_state[f"loaded_{current_poi_key}"] = True
     log_experimental_event("page_loaded")
 
-# ==================== Dify RAG 函数 ====================
+# ==================== Dify RAG 函数（不变）====================
 def simulate_rag_engine(user_query):
     start = time.time()
     url = "https://api.dify.ai/v1/chat-messages"
@@ -454,25 +502,25 @@ AI回答：{ai_answer}
     except Exception:
         return generate_followups_fallback()
 
-# ==================== 处理用户提问（含 Skeleton 动画） ====================
+# ==================== 处理用户提问（骨架屏替换 spinner）====================
 def handle_question(question):
-    # 显示骨架屏动画
-    skeleton = st.empty()
-    skeleton.markdown("""
-    <div class="jn-skeleton"></div>
-    <div style="height:10px"></div>
-    <div class="jn-skeleton" style="height:58px;width:72%;"></div>
+    # 骨架屏动画容器
+    skeleton_placeholder = st.empty()
+    skeleton_placeholder.markdown("""
+    <div class="jn-skeleton" style="height: 90px; width: 100%;"></div>
+    <div class="jn-skeleton" style="height: 60px; width: 80%; margin-top: 12px;"></div>
+    <div class="jn-skeleton" style="height: 40px; width: 60%; margin-top: 12px;"></div>
     """, unsafe_allow_html=True)
 
     ans, src, chunks, elapsed = simulate_rag_engine(question)
-    skeleton.empty()  # 移除骨架屏
+    skeleton_placeholder.empty()  # 移除骨架屏
 
     st.session_state.chat_messages.append({"role": "user", "content": question})
     st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
     log_experimental_event("question_submitted", question, elapsed, chunks, src)
 
-    # 朗读回答
-    safe_ans = ans.replace('"', '\\"')
+    # 语音朗读回答
+    safe_ans = ans.replace('"', '\\"').replace("\n", " ")
     st.markdown(f'<script>speakText("{safe_ans}")</script>', unsafe_allow_html=True)
 
     if actual_render == "recchatbox":
@@ -480,22 +528,9 @@ def handle_question(question):
     else:
         st.session_state.followup_questions = []
 
-    st.toast("AI 导览员已生成回答", icon="✨")
     st.rerun()
 
-# ==================== 辅助函数：跳转 POI ====================
-def jump_to_poi(pid):
-    st.session_state.current_poi_index = POI_ORDER.index(pid)
-    st.session_state.chat_messages = []
-    st.session_state.followup_questions = []
-    st.session_state.ai_response = None
-    st.session_state.page_load_time = time.time()
-    st.query_params["poi"] = pid
-    st.query_params["pid"] = st.session_state.participant_id
-    st.toast(f"已为你定位到：{POI_NAMES[pid]}", icon="⌖")
-    st.rerun()
-
-# ==================== 侧边栏（左侧5个POI按钮已变为透明边框） ====================
+# ==================== 侧边栏（透明底边框 POI 按钮）====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
 st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
@@ -508,12 +543,13 @@ st.sidebar.progress(progress)
 
 for idx, pid in enumerate(POI_ORDER):
     if idx < st.session_state.current_poi_index:
-        icon = "◆"
+        icon = "✅"
     elif idx == st.session_state.current_poi_index:
-        icon = "⌖"
+        icon = "📍"
     else:
-        icon = "◇"
+        icon = "◻️"
     poi_name = POI_NAMES[pid]
+    # 使用 use_container_width 让按钮占满宽度
     if st.sidebar.button(f"{icon} {poi_name}", key=f"nav_{pid}", use_container_width=True):
         if idx != st.session_state.current_poi_index:
             st.session_state.current_poi_index = idx
@@ -523,129 +559,66 @@ for idx, pid in enumerate(POI_ORDER):
             st.session_state.page_load_time = time.time()
             st.query_params["poi"] = pid
             st.query_params["pid"] = st.session_state.participant_id
-            st.toast(f"已切换到：{poi_name}", icon="⌖")
             st.rerun()
 
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 导出日志 CSV"):
+if st.sidebar.button("📥 导出日志 CSV", use_container_width=True):
     if st.session_state.logs:
         df = pd.DataFrame(st.session_state.logs)
-        st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
+        st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv", use_container_width=True)
 
-# ==================== 主界面渲染 ====================
-# Hero 区（加大，内部包含四个透明功能按钮）
-st.markdown(f"""
-<div class="jn-hero reveal">
-  <div class="jn-hero-title">惠山古镇<br><span>历史街区</span></div>
-  <div class="jn-hero-sub">
-    面向 3A 实验的江南科技风 AI 导览界面：在真实点位、文化知识库与智能问答之间建立轻盈、可探索的游览路径。
-  </div>
-  <div class="jn-hero-actions">
-    <div class="jn-hero-action" onclick="showComingSoon()">📅 景区预约</div>
-    <div class="jn-hero-action" onclick="scrollToChat()">🤖 问AI</div>
-    <div class="jn-hero-action" onclick="showComingSoon()">📆 活动日历</div>
-    <div class="jn-hero-action" onclick="showComingSoon()">🏛️ 历史名迹</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# 搜索表单（移到 Hero 下方）
-with st.form("route_search_form", clear_on_submit=True):
-    st.markdown('<div class="jn-route-form jn-glass reveal">', unsafe_allow_html=True)
-    route_query = st.text_input(
-        "路线搜索",
-        placeholder="搜索景点、历史人物、非遗故事或推荐路线",
-        label_visibility="collapsed",
-    )
-    route_submit = st.form_submit_button("搜索并跳转", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-if route_submit and route_query:
-    matched_pid = None
-    for alias, pid in ROUTE_ALIASES.items():
-        if alias in route_query:
-            matched_pid = pid
-            break
-    if matched_pid:
-        jump_to_poi(matched_pid)
-    else:
-        st.toast("没有找到对应路线，请试试“二泉 / 金莲桥 / 竹炉山房”。", icon="⌕")
-
-# Bento 网格（保留）
+# ==================== 主界面渲染（新布局）====================
+# 1. Hero 区（大主图 + 内置四个透明按钮）
 st.markdown("""
-<div class="jn-bento reveal">
-  <div class="jn-bento-card jn-bento-large">
-    <div class="jn-bento-kicker">3A RAG EXPERIENCE</div>
-    <div class="jn-bento-title">AI 导览问答</div>
-    <div class="jn-bento-text">基于五个惠山古镇 POI 的知识库，支持自由提问、推荐追问与来源提示。</div>
-  </div>
-  <div class="jn-bento-card jn-bento-wide">
-    <div class="jn-bento-kicker">ROUTE</div>
-    <div class="jn-bento-title">路线推荐</div>
-    <div class="jn-bento-text">从祠堂、古桥、园林、茶事到二泉，形成连续游览路径。</div>
-  </div>
-  <div class="jn-bento-card jn-bento-small">
-    <div class="jn-bento-kicker">VOICE</div>
-    <div class="jn-bento-title">语音</div>
-    <div class="jn-bento-text">朗读介绍。</div>
-  </div>
-  <div class="jn-bento-card jn-bento-wide">
-    <div class="jn-bento-kicker">LOG</div>
-    <div class="jn-bento-title">实验记录</div>
-    <div class="jn-bento-text">记录停留、提问、回答时长与点位切换。</div>
-  </div>
-  <div class="jn-bento-card jn-bento-wide">
-    <div class="jn-bento-kicker">CULTURE</div>
-    <div class="jn-bento-title">江南文脉</div>
-    <div class="jn-bento-text">整合名臣、泉茶、园林、寺桥和音乐记忆。</div>
+<div class="jn-hero reveal">
+  <div class="jn-hero-title">惠山古镇<br><span>AI 导览员</span></div>
+  <div class="jn-hero-sub">3A 智能问答 · 非遗知识库 · 语音陪伴</div>
+  <div class="jn-hero-actions">
+    <div class="jn-hero-action" id="btn_book">📅 景区预约</div>
+    <div class="jn-hero-action" id="btn_ai">🤖 问AI</div>
+    <div class="jn-hero-action" id="btn_calendar">🗓️ 活动日历</div>
+    <div class="jn-hero-action" id="btn_history">🏛️ 历史名迹</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# POI 卡片列表（5个，每个旁边展示对应图片）
-st.markdown('<div class="jn-poi-list reveal">', unsafe_allow_html=True)
+# 2. 搜索栏（原输入框移到这里，但保持功能）
+with st.container():
+    st.markdown('<div class="jn-search reveal">搜索景点、历史人物、非遗故事或推荐路线</div>', unsafe_allow_html=True)
+
+# 3. 五个 POI 卡片（带图片）
+st.markdown('<div class="reveal"><h3 style="font-weight:800;">🏞️ 探索点位</h3></div>', unsafe_allow_html=True)
+poi_grid_html = '<div class="jn-poi-grid reveal">'
 for pid in POI_ORDER:
     poi = poi_database[pid]
-    img_src = POI_IMAGES[pid]
-    st.markdown(f"""
-    <div class="jn-poi-card jn-glass">
-      <img src="{img_src}" alt="{escape(poi['name'])}">
-      <div>
-        <div class="jn-poi-title">{escape(poi['name'])}</div>
-        <div class="jn-poi-desc">{escape(poi['info'])}</div>
-      </div>
+    img_src = POI_IMAGES.get(pid, "")
+    poi_grid_html += f"""
+    <div class="jn-poi-card">
+        <img class="jn-poi-img" src="{img_src}" alt="{escape(poi['name'])}">
+        <div class="jn-poi-content">
+            <div class="jn-poi-name">{escape(poi['name'])}</div>
+            <div class="jn-poi-desc">{escape(poi['info'][:150])}{"…" if len(poi['info']) > 150 else ""}</div>
+        </div>
     </div>
-    """, unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
+    """
+poi_grid_html += '</div>'
+st.markdown(poi_grid_html, unsafe_allow_html=True)
 
-# Masonry 图片网格
-st.markdown('<div class="jn-masonry reveal">', unsafe_allow_html=True)
-for caption, img in MASONRY_IMAGES:
-    st.markdown(f"""
-    <div class="jn-masonry-item">
-      <img src="{img}" alt="{escape(caption)}">
-      <div class="jn-masonry-caption">{escape(caption)}</div>
-    </div>
-    """, unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
-
-# 当前 POI 详情卡片
+# 4. 当前点位详情 + 语音按钮（保持原有内容）
 st.markdown(f"""
-<div class="jn-glass reveal" style="padding:22px;margin:20px 0;">
-  <div class="jn-bento-kicker">CURRENT POI</div>
-  <div class="jn-bento-title">{escape(current_poi['name'])}</div>
-  <div class="jn-bento-text">{escape(current_poi['info'])}</div>
+<div class="jn-card reveal">
+    <div style="font-size: 20px; font-weight: 800;">📍 当前：{escape(current_poi['name'])}</div>
+    <div style="margin-top: 12px; line-height: 1.7;">{escape(current_poi['info'])}</div>
 </div>
 """, unsafe_allow_html=True)
 
-# 语音按钮
 voice_col, _ = st.columns([1, 5])
 with voice_col:
     if st.button("🔊 朗读介绍", key="speak_intro", help="点击聆听景点介绍"):
         safe_info = current_poi["info"].replace("\\", "\\\\").replace('"', '\\"')
         st.markdown(f'<script>speakText("{safe_info}")</script>', unsafe_allow_html=True)
 
-# 聊天界面
+# 5. AI 聊天界面（保持原有逻辑）
 if actual_render == "baseline":
     st.caption("✨ 静态展示模式 · 无 AI 对话")
 else:
@@ -666,23 +639,7 @@ else:
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt)
 
-# 底部无限跑马灯
-st.markdown("""
-<div class="jn-marquee reveal">
-  <div class="jn-marquee-track">
-    <span class="jn-logo">3A Experiment</span><span class="jn-logo">Streamlit</span>
-    <span class="jn-logo">Dify RAG</span><span class="jn-logo">Supabase</span>
-    <span class="jn-logo">Huishan Ancient Town</span><span class="jn-logo">AI Guide</span>
-    <span class="jn-logo">Jiangnan Tech</span><span class="jn-logo">Cultural Heritage</span>
-    <span class="jn-logo">3A Experiment</span><span class="jn-logo">Streamlit</span>
-    <span class="jn-logo">Dify RAG</span><span class="jn-logo">Supabase</span>
-    <span class="jn-logo">Huishan Ancient Town</span><span class="jn-logo">AI Guide</span>
-    <span class="jn-logo">Jiangnan Tech</span><span class="jn-logo">Cultural Heritage</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# 切换点位 / 完成实验
+# 6. 下一站按钮
 st.markdown("---")
 current_idx = st.session_state.current_poi_index
 if current_idx + 1 < len(POI_ORDER):
