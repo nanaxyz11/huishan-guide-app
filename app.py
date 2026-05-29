@@ -16,11 +16,14 @@ st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", lay
 
 # ==================== GitHub 图片直链（中文路径自动编码） ====================
 def get_github_raw_url(filename: str) -> str:
+    """根据文件名生成 GitHub raw 链接，自动处理中文编码"""
     base = "https://raw.githubusercontent.com/nanaxyz11/huishan-guide-app/main/%E6%83%A0%E5%B1%B1%E5%8F%A45POI%E5%9B%BE/"
     encoded_filename = quote(filename)
     return base + encoded_filename
 
+# 主图背景 URL
 MAIN_IMG_URL = get_github_raw_url("主图.jpg")
+# 推荐卡片图片 URL
 RECOMMEND_IMG_URLS = {
     "天下第二泉": get_github_raw_url("二泉.jpg"),
     "古华山门": get_github_raw_url("金莲桥.jpg"),
@@ -29,8 +32,18 @@ RECOMMEND_IMG_URLS = {
     "范文正公祠": get_github_raw_url("范文公正祠.jpg")
 }
 
+# 本地路径备用（仅用于开发环境，云端无效）
+LOCAL_IMG_BASE = "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图"
+
+def get_img_url_or_local(filename: str, github_url: str) -> str:
+    """优先使用 GitHub raw，若本地存在（开发环境）则使用本地路径，否则返回 GitHub URL"""
+    if os.path.exists(os.path.join(LOCAL_IMG_BASE, filename)):
+        return os.path.join(LOCAL_IMG_BASE, filename)
+    return github_url
+
 # ==================== 实时天气、舒适度、人流量 ====================
 def get_weather_and_comfort():
+    """获取无锡实时天气、温度，并计算舒适度，人流量写固定值"""
     try:
         url = "https://wttr.in/Wuxi?format=%C+%t&lang=zh"
         response = requests.get(url, timeout=5)
@@ -61,10 +74,10 @@ def get_weather_and_comfort():
     except Exception:
         return "晴 20°C · 体感舒适 · 街区人流舒适"
 
-# ==================== CSS 样式（含横向滚动卡片） ====================
+# ==================== 强化版 CSS（移动端横向滚动强制生效） ====================
 st.markdown("""
 <style>
-/* 基础样式 */
+/* ===== Hue SkillC: Jiangnan Tech 3A Streamlit ===== */
 :root {
   --jn-bg-1: #dff7fb;
   --jn-bg-2: #f7fff8;
@@ -78,15 +91,26 @@ st.markdown("""
   --jn-gold: #c99452;
   --jn-line: rgba(31, 143, 255, 0.16);
 }
+
 .stApp {
-  background: radial-gradient(circle at 12% 8%, rgba(98,220,232,.42), transparent 28%),
-              radial-gradient(circle at 85% 18%, rgba(52,211,153,.28), transparent 24%),
-              linear-gradient(180deg, var(--jn-bg-1) 0%, var(--jn-bg-2) 100%);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(98, 220, 232, .42), transparent 28%),
+    radial-gradient(circle at 85% 18%, rgba(52, 211, 153, .28), transparent 24%),
+    linear-gradient(180deg, var(--jn-bg-1) 0%, var(--jn-bg-2) 100%);
   color: var(--jn-ink);
 }
-.block-container { max-width: 1080px; padding-top: 1.4rem; }
 
-/* Hero */
+[data-testid="stHeader"] {
+  background: rgba(223, 247, 251, .72);
+  backdrop-filter: blur(14px);
+}
+
+.block-container {
+  max-width: 1080px;
+  padding-top: 1.4rem;
+}
+
+/* Hero 区域 */
 .jn-hero {
   position: relative;
   min-height: 260px;
@@ -95,7 +119,7 @@ st.markdown("""
   padding: 28px;
   background-size: cover;
   background-position: center 30%;
-  box-shadow: 0 24px 60px rgba(25,110,130,.22);
+  box-shadow: 0 24px 60px rgba(25, 110, 130, .22);
   margin-bottom: 28px;
 }
 .jn-hero::after {
@@ -128,14 +152,16 @@ st.markdown("""
   color: rgba(255,255,255,.86);
 }
 
-/* 天气栏 */
+/* 实时天气栏 */
 .jn-weather-bar {
   margin-top: 0px;
+  position: relative;
+  z-index: 3;
   background: rgba(255,255,255,.86);
   border: 1px solid var(--jn-line);
   border-radius: 999px;
   padding: 14px 24px;
-  box-shadow: 0 16px 38px rgba(43,140,160,.16);
+  box-shadow: 0 16px 38px rgba(43, 140, 160, .16);
   margin-bottom: 24px;
   color: var(--jn-ink);
   font-weight: 600;
@@ -144,13 +170,13 @@ st.markdown("""
   font-size: 1.05rem;
 }
 
-/* 卡片通用 */
+/* 内容卡片 */
 .jn-card {
   background: var(--jn-card);
   border: 1px solid rgba(255,255,255,.76);
   border-radius: 24px;
   padding: 20px;
-  box-shadow: 0 16px 40px rgba(45,120,138,.13);
+  box-shadow: 0 16px 40px rgba(45, 120, 138, .13);
   backdrop-filter: blur(18px);
   margin-bottom: 20px;
 }
@@ -160,74 +186,44 @@ st.markdown("""
   margin: 6px 0 12px;
 }
 
-/* ===== 横向滚动卡片区 ===== */
-.scroll-container {
-  overflow-x: auto;
-  overflow-y: hidden;
-  white-space: nowrap;
-  padding-bottom: 12px;
-  margin: 0 -8px;
+/* ========= 强制移动端横向滚动（关键修复） ========= */
+/* 针对 Streamlit 的列容器强制不换行 + 可滚动 */
+div[data-testid="column"],
+div.row-widget.stHorizontalBlock {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    gap: 16px;
 }
-.scroll-container::-webkit-scrollbar {
-  height: 6px;
+/* 每一列的宽度固定，不压缩 */
+div[data-testid="column"] > div {
+    min-width: 130px !important;
+    width: 130px !important;
+    flex: 0 0 auto !important;
 }
-.scroll-container::-webkit-scrollbar-track {
-  background: rgba(0,0,0,0.05);
-  border-radius: 10px;
-}
-.scroll-container::-webkit-scrollbar-thumb {
-  background: rgba(31,143,255,0.3);
-  border-radius: 10px;
-}
+/* 推荐卡片内部样式 */
 .recommend-card {
-  display: inline-block;
-  width: 110px;
-  margin: 0 8px;
-  vertical-align: top;
-  background: rgba(255,255,255,0.6);
-  border-radius: 24px;
-  padding: 12px 8px;
-  text-align: center;
-  backdrop-filter: blur(4px);
-  border: 1px solid rgba(255,255,255,0.8);
-  transition: all 0.2s;
-}
-.recommend-card:hover {
-  transform: translateY(-4px);
-  background: rgba(255,255,255,0.85);
+    text-align: center;
 }
 .recommend-img {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  border-radius: 18px;
-  margin-bottom: 10px;
-  box-shadow: 0 6px 14px rgba(0,0,0,0.1);
-  background-color: #e2e8f0;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border-radius: 18px;
+    margin-bottom: 8px;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.1);
 }
 .recommend-name {
-  font-weight: 800;
-  font-size: 0.85rem;
-  margin: 8px 0 4px;
-  white-space: normal;
-}
-.recommend-btn {
-  background: rgba(31,143,255,0.12);
-  border: none;
-  border-radius: 40px;
-  padding: 5px 12px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: #126fbf;
-  cursor: pointer;
-  width: 100%;
-  margin-top: 6px;
-}
-.recommend-btn:hover {
-  background: rgba(31,143,255,0.25);
+    font-weight: 800;
+    font-size: 0.85rem;
+    margin: 8px 0 4px;
+    white-space: normal;
+    word-break: keep-all;
 }
 
-/* 其他样式 */
+/* 按钮样式 */
 div.stButton > button {
   background: linear-gradient(135deg, var(--jn-blue), var(--jn-green));
   color: white;
@@ -236,6 +232,36 @@ div.stButton > button {
   padding: .75rem 1.35rem;
   font-weight: 800;
   box-shadow: 0 12px 26px rgba(31,143,255,.24);
+  transition: all 0.2s;
+}
+div.stButton > button:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+.voice-btn {
+  background: #ffffffcc;
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--jn-line);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+  font-size: 0.9rem;
+}
+.voice-btn:hover {
+  background: var(--jn-orange);
+  color: white;
+  border-color: var(--jn-orange);
+}
+.stTextInput input, .stTextArea textarea {
+  background: rgba(255,255,255,.86);
+  border: 1px solid rgba(31,143,255,.18);
+  border-radius: 16px;
+}
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(232,250,252,.86));
+  border-right: 1px solid rgba(31,143,255,.12);
 }
 .source-chip {
   display: inline-block;
@@ -244,14 +270,44 @@ div.stButton > button {
   padding: 4px 12px;
   border-radius: 20px;
   font-size: 0.7rem;
+  font-weight: 500;
+  margin-top: 8px;
+}
+
+/* 移动端额外优化：卡片内按钮不会太大 */
+@media (max-width: 640px) {
+    div[data-testid="column"] > div {
+        min-width: 110px !important;
+        width: 110px !important;
+    }
+    .recommend-name {
+        font-size: 0.75rem;
+    }
+    div.stButton > button {
+        padding: 0.5rem 0.8rem;
+        font-size: 0.8rem;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
 
-# 语音 JS（保持不变）
+# ==================== 语音 JS ====================
 st.markdown("""
 <script>
+window.speechSynthesisPolyfill = function() {
+    if (!window.speechSynthesis) {
+        alert("您的浏览器不支持语音合成");
+        return false;
+    }
+    var dummy = new SpeechSynthesisUtterance("");
+    window.speechSynthesis.cancel();
+    return true;
+};
 window.speakText = function(text) {
+    if (!window.speechSynthesis) {
+        alert("您的浏览器不支持语音合成");
+        return;
+    }
     var utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
     utterance.rate = 0.9;
@@ -321,7 +377,7 @@ else:
     actual_render = "recchatbox"
     display_condition_name = "智能推荐对话"
 
-# 其他 session 状态
+# ==================== 其他 Session 状态 ====================
 if "logs" not in st.session_state:
     st.session_state.logs = []
 if "page_load_time" not in st.session_state:
@@ -338,15 +394,17 @@ if actual_render != "baseline" and not st.session_state.chat_messages:
         {"role": "assistant", "content": f"您好！欢迎来到【{current_poi['name']}】。您可以问我任何关于这个古迹的问题。"}
     ]
 
-# Supabase
+# Supabase 客户端
 if "supabase" not in st.session_state:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     st.session_state.supabase = create_client(supabase_url, supabase_key)
 
-# 日志函数
+# ==================== 日志函数 ====================
 def log_experimental_event(action_type, query_text="", response_time=0.0, retrieved_chunks="", displayed_source_cue=""):
     time_on_page = time.time() - st.session_state.page_load_time
+    query_length = len(query_text) if query_text else 0
+
     event_data = {
         "participant_id": str(st.session_state.participant_id),
         "experimental_condition": current_condition,
@@ -354,7 +412,7 @@ def log_experimental_event(action_type, query_text="", response_time=0.0, retrie
         "action_type": str(action_type),
         "time_on_page_seconds": round(time_on_page, 2),
         "user_query_text": str(query_text),
-        "user_query_word_count": len(query_text),
+        "user_query_word_count": query_length,
         "rag_response_time_ms": round(response_time * 1000, 1),
         "retrieved_chunks_saved": str(retrieved_chunks),
         "displayed_source_cue": str(displayed_source_cue),
@@ -448,6 +506,7 @@ st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
 st.sidebar.markdown(f"**进度**：{st.session_state.current_poi_index+1}/{len(POI_ORDER)}")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🏮 游览路线")
+
 progress = (st.session_state.current_poi_index + 1) / len(POI_ORDER)
 st.sidebar.progress(progress)
 for idx, pid in enumerate(POI_ORDER):
@@ -468,6 +527,7 @@ for idx, pid in enumerate(POI_ORDER):
             st.query_params["poi"] = pid
             st.query_params["pid"] = st.session_state.participant_id
             st.rerun()
+
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 导出日志 CSV"):
     if st.session_state.logs:
@@ -475,8 +535,9 @@ if st.sidebar.button("📥 导出日志 CSV"):
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
 # ==================== 主界面渲染 ====================
-# Hero 背景
-hero_bg_style = f"background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{MAIN_IMG_URL}');"
+# 1. 主图背景（使用 GitHub raw + 本地备选）
+main_img_src = get_img_url_or_local("主图.jpg", MAIN_IMG_URL)
+hero_bg_style = f"background-image: linear-gradient(90deg, rgba(10, 30, 36, .68), rgba(10, 30, 36, .28)), url('{main_img_src}');"
 st.markdown(f"""
 <div class="jn-hero" style="{hero_bg_style}">
   <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
@@ -486,57 +547,34 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 天气栏
+# 2. 实时天气栏
 weather_str = get_weather_and_comfort()
-st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {weather_str}</div>', unsafe_allow_html=True)
+st.markdown(f"""
+<div class="jn-weather-bar">
+  🌸 惠山古镇 · {weather_str}
+</div>
+""", unsafe_allow_html=True)
 
-# ========== 横向滚动推荐卡片 (纯 HTML + CSS，确保手机一行显示) ==========
+# 3. 今日推荐横向滚动卡片（删除功能宫格，强制一行）
 st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div>', unsafe_allow_html=True)
-st.markdown('<div class="scroll-container">', unsafe_allow_html=True)
-
-# 推荐列表
-recommend_list = [
+recommend_pois = [
     ("天下第二泉", "erquan", RECOMMEND_IMG_URLS["天下第二泉"]),
     ("古华山门", "guhuashanmen", RECOMMEND_IMG_URLS["古华山门"]),
     ("知鱼栏", "bayinjian", RECOMMEND_IMG_URLS["知鱼栏"]),
     ("竹炉山房", "zhulu_shanfang", RECOMMEND_IMG_URLS["竹炉山房"]),
     ("范文正公祠", "fanwenzheng_gongci", RECOMMEND_IMG_URLS["范文正公祠"])
 ]
-
-# 生成每个卡片（HTML + 内部使用 st.button 需要特殊处理：这里采用 st.markdown 生成按钮外观，但实际点击需用 query params 跳转，为了简单，改用 st.button 外置？不能混用。为了避免复杂，我们为每个卡片单独使用 st.button 但不放在 HTML 中，而是用空 div 占位后通过 columns 或回调？更靠谱：保留之前 st.columns 但用滚动容器包裹，但之前失败是因为 CSS 未生效。这里我们使用 st.columns 但父容器滚动，并且强制内部 column 宽度固定，已经测试有效）
-# 但为了绝对可靠，我改用 st.columns + 可滚动父容器，并再次强制样式。
-# 重新实现：用 with 容器 + 自定义类
-st.markdown('</div>', unsafe_allow_html=True)  # 关闭 scroll-container
-st.markdown('</div>', unsafe_allow_html=True)  # 关闭 jn-card
-
-# 由于上面的尝试可能还是会被 streamlit 覆盖，我改为采用最稳定的方法：使用 st.columns 并强制不换行，且父级可滚动。
-# 实际测试中，只需在 CSS 中设置 .row-widget.stHorizontalBlock { flex-wrap: nowrap; overflow-x: auto; } 即可。
-# 同时设置每个 column 的 min-width。我将在下面采用此方法。
-
-# 更简洁可靠的方案：使用 st.columns 并覆盖 CSS
-st.markdown("""
-<style>
-/* 强制横向滚动 */
-.horizontal-scroll .stHorizontalBlock {
-    flex-wrap: nowrap !important;
-    overflow-x: auto !important;
-    gap: 16px;
-    padding-bottom: 12px;
-}
-.horizontal-scroll .stHorizontalBlock > div {
-    flex: 0 0 auto !important;
-    min-width: 110px !important;
-    width: 110px !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div><div class="horizontal-scroll">', unsafe_allow_html=True)
-cols = st.columns(len(recommend_list))
-for idx, (name, poi_id, img_url) in enumerate(recommend_list):
+# 使用 columns 并依赖 CSS 强制横向滚动
+cols = st.columns(len(recommend_pois))
+for idx, (name, poi_id, github_url) in enumerate(recommend_pois):
+    # 获取图片实际 URL（优先本地，否则 GitHub）
+    img_url = get_img_url_or_local(
+        {"天下第二泉": "二泉.jpg", "古华山门": "金莲桥.jpg", "知鱼栏": "知鱼栏.jpg", "竹炉山房": "竹炉山房.jpg", "范文正公祠": "范文公正祠.jpg"}[name],
+        github_url
+    )
     with cols[idx]:
-        st.image(img_url, use_column_width=True, output_format="JPPG")
-        st.markdown(f'<div style="text-align:center; font-weight:800; margin-top:8px;">{name}</div>', unsafe_allow_html=True)
+        st.image(img_url, use_column_width=True, output_format="JPEG")
+        st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
         if st.button("✨ 探寻", key=f"rec_btn_{idx}"):
             if poi_id in POI_ORDER:
                 new_index = POI_ORDER.index(poi_id)
@@ -551,11 +589,11 @@ for idx, (name, poi_id, img_url) in enumerate(recommend_list):
                     st.rerun()
             else:
                 st.warning("该点位暂未开放")
-st.markdown('</div></div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-# 当前点位详情卡片
+# 4. 当前点位详情卡片
 st.markdown(f"""
-<div class="jn-card">
+<div class="jn-card" style="margin-top:4px;">
   <div style="display:flex; align-items:center; gap:8px;">
     <span style="font-size:28px;">📍</span>
     <b style="font-size:22px;">{current_poi['name']}</b>
