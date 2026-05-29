@@ -17,6 +17,7 @@ st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", lay
 # ==================== GitHub 图片直链（中文路径自动编码） ====================
 def get_github_raw_url(filename: str) -> str:
     """根据文件名生成 GitHub raw 链接，自动处理中文编码"""
+    # 确保仓库名和路径大小写与用户提供的完全一致
     base = "https://raw.githubusercontent.com/nanaxyz11/huishan-guide-app/main/%E6%83%A0%E5%B1%B1%E5%8F%A45POI%E5%9B%BE/"
     encoded_filename = quote(filename)
     return base + encoded_filename
@@ -32,7 +33,7 @@ RECOMMEND_IMG_URLS = {
     "范文正公祠": get_github_raw_url("范文公正祠.jpg")
 }
 
-# ==================== 实时天气、舒适度、人流量（修复缩进错误） ====================
+# ==================== 实时天气、舒适度、人流量 ====================
 def get_weather_and_comfort():
     """获取无锡实时天气、温度，并计算舒适度，人流量写固定值"""
     try:
@@ -42,12 +43,10 @@ def get_weather_and_comfort():
             weather_text = response.text.strip()
             parts = weather_text.split()
             if len(parts) >= 2:
-                condition = parts[0]      # 天气状况
-                temp_str = parts[1]       # +18°C 或 18°C
-                # 提取数字温度
+                condition = parts[0]
+                temp_str = parts[1]
                 temp_num = re.search(r'[-+]?\d+', temp_str)
                 temp_c = int(temp_num.group()) if temp_num else 18
-                # 简易舒适度判断
                 if temp_c < 5:
                     comfort = "寒冷"
                 elif temp_c < 15:
@@ -58,7 +57,6 @@ def get_weather_and_comfort():
                     comfort = "偏热"
                 else:
                     comfort = "炎热"
-                # 人流量写死“舒适”
                 crowd = "舒适"
                 return f"{condition} {temp_str} · 体感{comfort} · 街区人流{crowd}"
             else:
@@ -68,7 +66,7 @@ def get_weather_and_comfort():
     except Exception:
         return "晴 20°C · 体感舒适 · 街区人流舒适"
 
-# ==================== 全新 Hue SkillC 风格（美化版 + 移动端优化） ====================
+# ==================== 样式（强制移动端横向滚动 + 图片容错） ====================
 st.markdown("""
 <style>
 /* ===== Hue SkillC: Jiangnan Tech 3A Streamlit ===== */
@@ -180,36 +178,46 @@ st.markdown("""
   margin: 6px 0 12px;
 }
 
-/* 横向滚动推荐卡片 (移动端一行显示) */
-.row-widget.stHorizontalBlock {
-    flex-wrap: nowrap !important;
-    overflow-x: auto !important;
-    gap: 16px;
+/* ========== 强制推荐卡片横向滚动（手机一行显示） ========== */
+.horizontal-scroll-wrapper {
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
     padding-bottom: 12px;
-}
-.row-widget.stHorizontalBlock > div {
-    flex: 0 0 auto !important;
-    min-width: 110px;
-    width: auto;
-}
-.recommend-card {
-    text-align: center;
-}
-.recommend-img {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
-    border-radius: 18px;
     margin-bottom: 8px;
-    box-shadow: 0 6px 14px rgba(0,0,0,0.1);
+}
+.horizontal-scroll-wrapper .stHorizontalBlock {
+    flex-wrap: nowrap !important;
+    display: flex !important;
+    gap: 16px;
+}
+.horizontal-scroll-wrapper .stHorizontalBlock > div {
+    flex: 0 0 auto !important;
+    width: 110px !important;
+    min-width: 110px !important;
+    display: inline-block;
+    white-space: normal;
+}
+/* 美化滚动条 */
+.horizontal-scroll-wrapper::-webkit-scrollbar {
+    height: 6px;
+}
+.horizontal-scroll-wrapper::-webkit-scrollbar-track {
+    background: rgba(0,0,0,0.05);
+    border-radius: 10px;
+}
+.horizontal-scroll-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(31,143,255,0.3);
+    border-radius: 10px;
 }
 .recommend-name {
     font-weight: 800;
     font-size: 0.85rem;
     margin: 8px 0 4px;
+    text-align: center;
 }
 
-/* 按钮样式 */
+/* 其他样式 */
 div.stButton > button {
   background: linear-gradient(135deg, var(--jn-blue), var(--jn-green));
   color: white;
@@ -223,22 +231,6 @@ div.stButton > button {
 div.stButton > button:hover {
   filter: brightness(1.04);
   transform: translateY(-1px);
-}
-.voice-btn {
-  background: #ffffffcc;
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--jn-line);
-  border-radius: 999px;
-  padding: 10px 20px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: 0.2s;
-  font-size: 0.9rem;
-}
-.voice-btn:hover {
-  background: var(--jn-orange);
-  color: white;
-  border-color: var(--jn-orange);
 }
 .stTextInput input, .stTextArea textarea {
   background: rgba(255,255,255,.86);
@@ -505,7 +497,7 @@ if st.sidebar.button("📥 导出日志 CSV"):
         df = pd.DataFrame(st.session_state.logs)
         st.sidebar.download_button("点击下载", data=df.to_csv(index=False), file_name=f"{st.session_state.participant_id}_logs.csv")
 
-# ==================== 主界面渲染 ====================
+# ==================== 主界面渲染（横向滚动 + 图片容错） ====================
 # 1. 主图背景
 hero_bg_style = f"background-image: linear-gradient(90deg, rgba(10, 30, 36, .68), rgba(10, 30, 36, .28)), url('{MAIN_IMG_URL}');"
 st.markdown(f"""
@@ -525,34 +517,37 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 3. 今日推荐横向卡片（删除功能宫格）
+# 3. 今日推荐横向卡片（强制一行显示）
 st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div>', unsafe_allow_html=True)
-recommend_pois = [
-    ("天下第二泉", "erquan", RECOMMEND_IMG_URLS["天下第二泉"]),
-    ("古华山门", "guhuashanmen", RECOMMEND_IMG_URLS["古华山门"]),
-    ("知鱼栏", "bayinjian", RECOMMEND_IMG_URLS["知鱼栏"]),
-    ("竹炉山房", "zhulu_shanfang", RECOMMEND_IMG_URLS["竹炉山房"]),
-    ("范文正公祠", "fanwenzheng_gongci", RECOMMEND_IMG_URLS["范文正公祠"])
-]
-cols = st.columns(len(recommend_pois))
-for idx, (name, poi_id, img_url) in enumerate(recommend_pois):
-    with cols[idx]:
-        st.image(img_url, use_column_width=True, output_format="JPEG")
-        st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
-        if st.button("✨ 探寻", key=f"rec_btn_{idx}"):
-            if poi_id in POI_ORDER:
-                new_index = POI_ORDER.index(poi_id)
-                if new_index != st.session_state.current_poi_index:
-                    st.session_state.current_poi_index = new_index
-                    st.session_state.chat_messages = []
-                    st.session_state.followup_questions = []
-                    st.session_state.ai_response = None
-                    st.session_state.page_load_time = time.time()
-                    st.query_params["poi"] = poi_id
-                    st.query_params["pid"] = st.session_state.participant_id
-                    st.rerun()
-            else:
-                st.warning("该点位暂未开放")
+
+# 使用自定义容器实现横向滚动
+with st.container():
+    st.markdown('<div class="horizontal-scroll-wrapper">', unsafe_allow_html=True)
+    cols = st.columns(len(recommend_pois))
+    for idx, (name, poi_id, img_url) in enumerate(recommend_pois):
+        with cols[idx]:
+            # 图片显示，如果加载失败则显示占位色块
+            try:
+                st.image(img_url, use_column_width=True, output_format="JPEG")
+            except Exception:
+                st.markdown('<div style="background:#e0e0e0; width:100%; aspect-ratio:1; border-radius:18px; display:flex; align-items:center; justify-content:center;">📷</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
+            if st.button("✨ 探寻", key=f"rec_btn_{idx}"):
+                if poi_id in POI_ORDER:
+                    new_index = POI_ORDER.index(poi_id)
+                    if new_index != st.session_state.current_poi_index:
+                        st.session_state.current_poi_index = new_index
+                        st.session_state.chat_messages = []
+                        st.session_state.followup_questions = []
+                        st.session_state.ai_response = None
+                        st.session_state.page_load_time = time.time()
+                        st.query_params["poi"] = poi_id
+                        st.query_params["pid"] = st.session_state.participant_id
+                        st.rerun()
+                else:
+                    st.warning("该点位暂未开放")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 st.markdown('</div>', unsafe_allow_html=True)
 
 # 4. 当前点位详情卡片
@@ -572,7 +567,7 @@ with voice_col:
     if st.button("🔊 朗读介绍", key="speak_intro"):
         st.markdown(f'<script>speakText("{current_poi["info"]}")</script>', unsafe_allow_html=True)
 
-# 聊天界面
+# 聊天界面（保持原样）
 if actual_render == "baseline":
     st.caption("✨ 静态展示模式 · 无 AI 对话")
 else:
