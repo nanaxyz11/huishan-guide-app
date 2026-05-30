@@ -331,25 +331,34 @@ expected_pois = ["fanwenzheng_gongci", "guhuashanmen", "bayinjian", "zhulu_shanf
 POI_ORDER = [p for p in expected_pois if p in poi_database]
 POI_NAMES = {pid: poi_database[pid]["name"] for pid in POI_ORDER}
 
+# ==================== 新实验设计：6组全排列条件映射 ====================
+# 条件代码: "baseline", "free_text", "recchatbox"
+# 按照文档 6-group full permutation 表
+GROUP_CONDITION_MAP = {
+    "G1": ["baseline", "free_text", "recchatbox", "baseline", "free_text"],
+    "G2": ["baseline", "recchatbox", "free_text", "baseline", "recchatbox"],
+    "G3": ["free_text", "baseline", "recchatbox", "free_text", "baseline"],
+    "G4": ["free_text", "recchatbox", "baseline", "free_text", "recchatbox"],
+    "G5": ["recchatbox", "baseline", "free_text", "recchatbox", "baseline"],
+    "G6": ["recchatbox", "free_text", "baseline", "recchatbox", "free_text"]
+}
+VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())  # ["G1","G2","G3","G4","G5","G6"]
+
 # ==================== URL 参数与 Session ====================
 if "participant_id" not in st.session_state:
     st.session_state.participant_id = st.query_params.get("pid", "P_TEST_USER")
 
+# 处理 group 参数：优先从 URL 获取，必须是 G1-G6；否则随机分配（用于调试，正式实验应由 Qualtrics 传入）
 url_group = st.query_params.get("group")
-if url_group in ["A", "B", "C"]:
+if url_group in VALID_GROUPS:
     st.session_state.group = url_group
 else:
     if "group" not in st.session_state:
-        hash_val = int(hashlib.md5(st.session_state.participant_id.encode()).hexdigest()[:4], 16)
-        group_map = ["A", "B", "C"]
-        st.session_state.group = group_map[hash_val % 3]
+        # 如果 session 中没有 group，随机分配一个（保证平衡，但正式实验最好由 Qualtrics 控制）
+        st.session_state.group = random.choice(VALID_GROUPS)
 
-group_condition_map = {
-    "A": ["baseline", "free_text", "recchatbox", "baseline", "free_text"],
-    "B": ["free_text", "recchatbox", "baseline", "free_text", "recchatbox"],
-    "C": ["recchatbox", "baseline", "free_text", "recchatbox", "baseline"]
-}
-condition_sequence = group_condition_map[st.session_state.group]
+# 获取当前 POI 对应的条件序列
+condition_sequence = GROUP_CONDITION_MAP[st.session_state.group]
 
 if "current_poi_index" not in st.session_state:
     current_poi_key = st.query_params.get("poi", POI_ORDER[0])
@@ -373,7 +382,7 @@ if current_condition == "baseline":
 elif current_condition == "free_text":
     actual_render = "free_text"
     display_condition_name = "自由提问 RAG"
-else:
+else:  # recchatbox
     actual_render = "recchatbox"
     display_condition_name = "智能推荐对话"
 
@@ -501,7 +510,7 @@ def handle_question(question):
 
 # ==================== 侧边栏 ====================
 st.sidebar.markdown(f"**参与者 ID**：`{st.session_state.participant_id}`")
-st.sidebar.markdown(f"**所属组别**：Group {st.session_state.group}")
+st.sidebar.markdown(f"**所属组别**：{st.session_state.group}")
 st.sidebar.markdown(f"**当前体验**：{display_condition_name}")
 st.sidebar.markdown(f"**进度**：{st.session_state.current_poi_index+1}/{len(POI_ORDER)}")
 st.sidebar.markdown("---")
