@@ -57,8 +57,177 @@ def get_weather_and_comfort():
 # ==================== CSS ====================
 st.markdown("""
 <style>
-/* 此处省略原有完整 CSS（与 app_副本2.py 完全相同，保证样式一致） */
-/* 为防止代码过长，实际部署时请使用原完整 CSS，此处仅保留占位 */
+/* ===== Hue SkillC: Jiangnan Tech 3A Streamlit ===== */
+:root {
+  --jn-bg-1: #dff7fb;
+  --jn-bg-2: #f7fff8;
+  --jn-card: rgba(255, 255, 255, 0.85);
+  --jn-ink: #182426;
+  --jn-muted: #6f7f82;
+  --jn-blue: #1f8fff;
+  --jn-cyan: #62dce8;
+  --jn-green: #34d399;
+  --jn-orange: #df7a2d;
+  --jn-gold: #c99452;
+  --jn-line: rgba(31, 143, 255, 0.16);
+}
+
+.stApp {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(98, 220, 232, .42), transparent 28%),
+    radial-gradient(circle at 85% 18%, rgba(52, 211, 153, .28), transparent 24%),
+    linear-gradient(180deg, var(--jn-bg-1) 0%, var(--jn-bg-2) 100%);
+  color: var(--jn-ink);
+}
+
+[data-testid="stHeader"] {
+  background: rgba(223, 247, 251, .72);
+  backdrop-filter: blur(14px);
+}
+
+.block-container {
+  max-width: 1080px;
+  padding-top: 1.4rem;
+}
+
+.jn-hero {
+  position: relative;
+  min-height: 260px;
+  border-radius: 28px;
+  overflow: hidden;
+  padding: 28px;
+  background-size: cover;
+  background-position: center 30%;
+  box-shadow: 0 24px 60px rgba(25, 110, 130, .22);
+  margin-bottom: 28px;
+}
+.jn-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(98,220,232,.45) 1px, transparent 1px);
+  background-size: 18px 18px;
+  opacity: .18;
+  pointer-events: none;
+}
+.jn-hero-title {
+  position: relative;
+  z-index: 1;
+  max-width: 620px;
+  font-size: 44px;
+  line-height: 1.08;
+  font-weight: 900;
+  color: white;
+  text-shadow: 0 4px 18px rgba(0,0,0,.32);
+}
+.jn-hero-title span { color: #8ff7ff; }
+.jn-hero-sub {
+  position: relative;
+  z-index: 1;
+  margin-top: 14px;
+  max-width: 520px;
+  font-size: 16px;
+  line-height: 1.7;
+  color: rgba(255,255,255,.86);
+}
+
+.jn-weather-bar {
+  margin-top: 0px;
+  position: relative;
+  z-index: 3;
+  background: rgba(255,255,255,.86);
+  border: 1px solid var(--jn-line);
+  border-radius: 999px;
+  padding: 14px 24px;
+  box-shadow: 0 16px 38px rgba(43, 140, 160, .16);
+  margin-bottom: 24px;
+  color: var(--jn-ink);
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  text-align: center;
+  font-size: 1.05rem;
+}
+
+.jn-card {
+  background: var(--jn-card);
+  border: 1px solid rgba(255,255,255,.76);
+  border-radius: 24px;
+  padding: 20px;
+  box-shadow: 0 16px 40px rgba(45, 120, 138, .13);
+  backdrop-filter: blur(18px);
+  margin-bottom: 20px;
+}
+.jn-section-title {
+  font-size: 22px;
+  font-weight: 900;
+  margin: 6px 0 12px;
+}
+
+div[data-testid="column"],
+div.row-widget.stHorizontalBlock {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    gap: 16px;
+}
+div[data-testid="column"] > div {
+    min-width: 130px !important;
+    width: 130px !important;
+    flex: 0 0 auto !important;
+}
+.recommend-name {
+    font-weight: 800;
+    font-size: 0.85rem;
+    margin: 8px 0 4px;
+    text-align: center;
+    white-space: normal;
+    word-break: keep-all;
+}
+
+div.stButton > button {
+  background: linear-gradient(135deg, var(--jn-blue), var(--jn-green));
+  color: white;
+  border: none;
+  border-radius: 999px;
+  padding: .75rem 1.35rem;
+  font-weight: 800;
+  box-shadow: 0 12px 26px rgba(31,143,255,.24);
+  transition: all 0.2s;
+}
+div.stButton > button:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+.stTextInput input, .stTextArea textarea {
+  background: rgba(255,255,255,.86);
+  border: 1px solid rgba(31,143,255,.18);
+  border-radius: 16px;
+}
+.source-chip {
+  display: inline-block;
+  background-color: rgba(31,143,255,0.12);
+  color: #1f8fff;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-top: 8px;
+}
+@media (max-width: 640px) {
+    div[data-testid="column"] > div {
+        min-width: 110px !important;
+        width: 110px !important;
+    }
+    .recommend-name {
+        font-size: 0.75rem;
+    }
+    div.stButton > button {
+        padding: 0.5rem 0.8rem;
+        font-size: 0.8rem;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -118,9 +287,8 @@ GROUP_CONDITION_MAP = {
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 
-# ==================== 错误日志辅助函数（写入 app_errors）====================
+# ==================== 错误日志辅助函数 ====================
 def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="UNKNOWN"):
-    """不依赖 session_state，参数由调用者传入，确保稳定写入"""
     error_data = {
         "participant_id": pid,
         "group": grp,
@@ -147,7 +315,6 @@ if "supabase" not in st.session_state:
         )
     except Exception as e:
         st.session_state.supabase = None
-        # 直接写本地错误
         error_data = {
             "participant_id": "UNKNOWN",
             "group": "UNKNOWN",
@@ -174,12 +341,12 @@ def assign_group_balanced():
                         cnt[row["group"]] += 1
                 return min(cnt, key=cnt.get)
         except Exception as e:
-            log_app_error("assign_group_balanced", str(e), 
+            log_app_error("assign_group_balanced", str(e),
                           pid=st.session_state.get("participant_id", "UNKNOWN"),
                           grp=st.session_state.get("group", "UNKNOWN"))
     return random.choice(VALID_GROUPS)
 
-# ==================== 新日志函数（分表写入，无静默失败）====================
+# ==================== 数据库写入函数 ====================
 def write_participant(pid, group, pretest_data):
     if not st.session_state.get("supabase"):
         return
@@ -269,7 +436,7 @@ def write_poi_completed(exposure_id, dwell_seconds):
     except Exception as e:
         log_app_error("write_poi_completed", str(e), exp_id=exposure_id)
 
-# ==================== 三个渲染函数（完全复刻 app_副本2.py 的稳定逻辑）====================
+# ==================== 三个渲染函数 ====================
 def render_baseline(poi):
     st.markdown(f"""
     <div class="jn-card">
@@ -352,8 +519,8 @@ def render_recchatbox(poi):
     st.markdown("---")
     st.markdown("#### 💡 推荐问题")
     
-    # 关键：初始化默认推荐问题（从 POI 数据中读取）
-    if "followup_questions" not in st.session_state:
+    # 修改点：确保初始推荐问题存在（如果为空则从 POI 数据中读取）
+    if "followup_questions" not in st.session_state or len(st.session_state.get("followup_questions", [])) == 0:
         st.session_state.followup_questions = poi.get("recs", [
             f"关于{poi['name']}还有哪些历史细节？",
             f"这里与无锡本地文化有什么关联？",
@@ -413,9 +580,13 @@ def generate_followup_questions(user_question, ai_answer, pid):
         return json.loads(match.group(0)) if match else []
     except Exception as e:
         log_app_error("generate_followup_questions", str(e), pid=pid)
-        return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
-                "这里与无锡本地文化有什么关联？",
-                "有什么值得关注的参观细节？"]
+        # 修改点：动态 fallback 基于用户问题生成
+        fallback_questions = [
+            f"关于“{user_question[:30]}...”您能再详细说说吗？",
+            f"除了刚才提到的，还有哪些相关的历史背景？",
+            f"这个解释和惠山古镇的其它点位有什么联系吗？"
+        ]
+        return fallback_questions
 
 def handle_question(question, poi, cond):
     with st.spinner("AI 导览员正在查阅史料..."):
@@ -425,7 +596,6 @@ def handle_question(question, poi, cond):
         st.session_state.chat_messages.append({"role": "user", "content": question})
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
         
-        # 写入 interaction_turns 表
         write_interaction_turn(
             exposure_id=st.session_state.get("current_exposure_id", "UNKNOWN"),
             query_text=question,
@@ -553,18 +723,16 @@ def show_poi_page():
     st.session_state.current_poi_name = poi["name"]
     st.session_state.current_condition = condition
     
-    # 每次进入 POI 时生成新的 exposure_id，并重置对话状态
     exposure_id = str(uuid.uuid4())
     st.session_state.current_exposure_id = exposure_id
     st.session_state.chat_messages = []
-    st.session_state.followup_questions = []  # 清空旧的推荐问题，稍后在渲染时重新初始化
+    st.session_state.followup_questions = []
     
     if "poi_page_load_ts" not in st.session_state:
         st.session_state.poi_page_load_ts = time.time()
     else:
-        st.session_state.poi_page_load_ts = time.time()  # 更新为当前时间
+        st.session_state.poi_page_load_ts = time.time()
     
-    # 写入 poi_exposures 表
     write_poi_exposure(
         pid=st.session_state.participant_id,
         group=st.session_state.group,
@@ -575,7 +743,6 @@ def show_poi_page():
         page_load_ts=st.session_state.poi_page_load_ts
     )
     
-    # Hero + 天气
     st.markdown(f"""
     <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
       <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
@@ -584,7 +751,6 @@ def show_poi_page():
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {get_weather_and_comfort()}</div>', unsafe_allow_html=True)
     
-    # 推荐卡片（无按钮，仅装饰）
     st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div>', unsafe_allow_html=True)
     cols = st.columns(5)
     rec_list = [
@@ -603,7 +769,6 @@ def show_poi_page():
             st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # 条件渲染
     if condition == "baseline":
         render_baseline(poi_data)
         st.caption("✨ 静态展示模式 · 无 AI 对话")
@@ -612,7 +777,6 @@ def show_poi_page():
     else:
         render_recchatbox(poi_data)
     
-    # 下一站 → 微问卷
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
         dwell = time.time() - st.session_state.poi_page_load_ts
         write_poi_completed(exposure_id, round(dwell, 2))
@@ -638,7 +802,6 @@ def show_micro_survey():
         trust = st.slider("信息在历史文化上是可信的", 1,7,4)
         source_use = st.slider("来源标注让我更愿意相信信息", 1,7,4)
         learn_conf = st.slider("我能向别人说明该点位的核心文化意义", 1,7,4)
-        # 知识题
         q_map = {
             "fanwenzheng_gongci": ("范文正公祠主要祭祀哪位历史人物？",["范仲淹","苏轼","陆羽","阿炳"],"范仲淹"),
             "guhuashanmen": ("金莲桥最适合作为哪类体验节点？",["空间过渡","商业消费","现代交通","纯自然景观"],"空间过渡"),
@@ -678,7 +841,6 @@ def show_micro_survey():
                 st.session_state.stage = "final_survey"
             else:
                 st.session_state.stage = "poi"
-                # 清空聊天记录和推荐问题，准备下一个 POI
                 st.session_state.chat_messages = []
                 st.session_state.followup_questions = []
             st.rerun()
@@ -691,35 +853,29 @@ def show_final_survey():
     with st.form("final_form"):
         for cond in conditions:
             st.markdown(f"#### {names[cond]}")
-            # SUS 10 题
             for i, sus_item in enumerate([
                 "我愿意继续使用该界面。","该界面显得不必要地复杂。","该界面容易上手。",
                 "我需要他人帮助才能顺利使用。","功能整合得很好。","在不同点位表现不一致。",
                 "多数游客能很快学会。","使用起来很累赘。","使用时有信心。","使用前需要学习很多东西。"]):
                 st.slider(f"SUS {i+1}: {sus_item}", 1,5,3, key=f"sus_{cond}_{i}")
-            # TOAST 5 题
             for i, toast_item in enumerate([
                 "帮助我完成文化信息探索目标。","表现稳定一致。","反应符合我的预期。",
                 "信息很少让我意外或困惑。","我愿意依赖该界面提供的信息。"]):
                 st.slider(f"TOAST {i+1}: {toast_item}", 1,7,4, key=f"toast_{cond}_{i}")
-            # C1-C3（仅 B/C）
             if cond != "baseline":
                 st.markdown("**交互体验评价**")
                 c1 = st.slider("提出问题是容易的。", 1,5,3, key=f"q_easy_{cond}")
                 c2 = st.slider("我理解系统给出的回答。", 1,5,3, key=f"ans_understand_{cond}")
                 c3 = st.slider("系统回答让我觉得内容更有趣。", 1,5,3, key=f"ans_interest_{cond}")
-                # 暂存到 session_state，稍后一起写入
                 st.session_state[f"c1_{cond}"] = c1
                 st.session_state[f"c2_{cond}"] = c2
                 st.session_state[f"c3_{cond}"] = c3
-                # C4-C5（仅 C）
                 if cond == "recchatbox":
                     c4 = st.slider("系统推荐的问题是清楚易懂的。", 1,5,3, key=f"recq_understand")
                     c5 = st.slider("系统推荐的问题能激发我继续探索。", 1,5,3, key=f"recq_interest")
                     st.session_state["c4_recchatbox"] = c4
                     st.session_state["c5_recchatbox"] = c5
             st.markdown("---")
-        
         st.markdown("#### 偏好与开放题")
         pref = st.radio("最愿意使用哪一种？", ["原始网页","自由提问 AI","推荐式交互"], key="pref")
         pref_reason = st.text_area("请说明原因")
@@ -727,7 +883,6 @@ def show_final_survey():
         interrupt_moment = st.text_area("有没有哪一刻手机信息干扰了你看真实场景？")
         comments = st.text_area("其他意见或建议")
         if st.form_submit_button("提交评价"):
-            # 组装 final_data
             final_data = {
                 "preference": pref,
                 "preference_reason": pref_reason,
