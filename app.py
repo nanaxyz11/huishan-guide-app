@@ -291,6 +291,18 @@ GROUP_CONDITION_MAP = {
     "G6": ["recchatbox", "free_text", "baseline", "recchatbox", "free_text"]
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
+CONDITION_CODE_MAP = {"baseline": "A", "free_text": "B", "recchatbox": "C"}
+
+
+def group_sequence_code(group):
+    return "".join(CONDITION_CODE_MAP.get(c, "?") for c in GROUP_CONDITION_MAP.get(group, []))
+
+
+def safe_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 # ==================== 错误日志辅助函数 ====================
 def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="UNKNOWN"):
@@ -307,7 +319,20 @@ def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="U
         f.write(f"{error_data}\n")
     if "supabase" in st.session_state and st.session_state.get("supabase"):
         try:
-            st.session_state.supabase.table("app_errors").insert(error_data).execute()
+            st.session_state.supabase.table("app_errors").insert({
+                "participant_id": pid,
+                "stage": st.session_state.get("stage", "unknown"),
+                "poi_id": st.session_state.get("current_poi_id"),
+                "condition": st.session_state.get("current_condition"),
+                "error_type": context,
+                "error_message": str(error_detail),
+                "payload": {
+                    "group_code": grp,
+                    "exposure_id": exp_id,
+                    "local_error_data": error_data
+                },
+                "created_at": datetime.now().isoformat()
+            }).execute()
         except:
             pass
 
@@ -338,12 +363,12 @@ def assign_group_balanced():
     supabase = st.session_state.get("supabase")
     if supabase:
         try:
-            res = supabase.table("participants").select("group").execute()
+            res = supabase.table("participants").select("group_code").execute()
             if res.data:
                 cnt = {g:0 for g in VALID_GROUPS}
                 for row in res.data:
-                    if row.get("group") in cnt:
-                        cnt[row["group"]] += 1
+                    if row.get("group_code") in cnt:
+                        cnt[row["group_code"]] += 1
                 return min(cnt, key=cnt.get)
         except Exception as e:
             log_app_error("assign_group_balanced", str(e),
@@ -356,11 +381,26 @@ def write_participant(pid, group, pretest_data):
     if not st.session_state.get("supabase"):
         return
     try:
+        cei_values = [safe_int(pretest_data.get(f"cei_{i}")) for i in range(1, 9)]
+        cei_values = [v for v in cei_values if v is not None]
         st.session_state.supabase.table("participants").insert({
             "participant_id": pid,
-            "group": group,
-            "pretest_data": pretest_data,
-            "created_at": datetime.now().isoformat()
+            "group_code": group,
+            "assigned_sequence": group_sequence_code(group),
+            "consent_given": True,
+            "consent_ts": datetime.fromtimestamp(st.session_state.get("consent_ts", time.time())).isoformat(),
+            "age": safe_int(pretest_data.get("age")),
+            "gender": pretest_data.get("gender"),
+            "education": pretest_data.get("education"),
+            "discipline": pretest_data.get("discipline"),
+            "heritage_visit_freq": safe_int(pretest_data.get("heritage_visit_freq")),
+            "huishan_familiarity": safe_int(pretest_data.get("huishan_familiarity")),
+            "genai_familiarity": safe_int(pretest_data.get("genai_familiarity")),
+            "mobile_guide_exp": safe_int(pretest_data.get("mobile_guide_exp")),
+            **{f"cei_{i}": safe_int(pretest_data.get(f"cei_{i}")) for i in range(1, 9)},
+            "cei_mean": round(sum(cei_values) / len(cei_values), 3) if cei_values else None,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
         log_app_error("write_participant", str(e), pid, group)
@@ -371,12 +411,15 @@ def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_posi
     try:
         st.session_state.supabase.table("poi_exposures").insert({
             "participant_id": pid,
-            "group": group,
+            "group_code": group,
             "exposure_id": exposure_id,
             "poi_id": poi_id,
+            "poi_name": st.session_state.get("current_poi_name"),
             "condition": condition,
+            "condition_order_base": group_sequence_code(group),
             "sequence_position": sequence_position,
-            "page_load_ts": page_load_ts,
+            "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat(),
+            "ui_version": "streamlit-3condition-0530",
             "created_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
@@ -386,15 +429,24 @@ def write_interaction_turn(exposure_id, query_text, query_type, response_text, r
     if not st.session_state.get("supabase"):
         return
     try:
+        retrieved_payload = retrieved_chunks
+        if isinstance(retrieved_chunks, str):
+            try:
+                retrieved_payload = json.loads(retrieved_chunks)
+            except Exception:
+                retrieved_payload = {"raw": retrieved_chunks}
         st.session_state.supabase.table("interaction_turns").insert({
+            "participant_id": st.session_state.get("participant_id"),
             "exposure_id": exposure_id,
+            "poi_id": st.session_state.get("current_poi_id"),
+            "condition": st.session_state.get("current_condition"),
             "query_text": query_text,
             "query_type": query_type,
             "response_text": response_text,
             "response_latency_ms": response_latency_ms,
-            "retrieved_chunks": retrieved_chunks,
+            "retrieved_chunks": retrieved_payload,
             "source_chip": source_chip,
-            "timestamp": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
         log_app_error("write_interaction_turn", str(e),
@@ -407,12 +459,12 @@ def write_micro_survey(pid, group, exposure_id, poi_id, condition, micro_data):
     try:
         st.session_state.supabase.table("micro_surveys").insert({
             "participant_id": pid,
-            "group": group,
             "exposure_id": exposure_id,
+            "sequence_position": st.session_state.get("poi_index", 0) + 1,
             "poi_id": poi_id,
             "condition": condition,
             **micro_data,
-            "created_at": datetime.now().isoformat()
+            "submitted_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
         log_app_error("write_micro_survey", str(e), pid, group, exposure_id)
@@ -423,9 +475,15 @@ def write_final_survey(pid, group, final_data):
     try:
         st.session_state.supabase.table("final_surveys").insert({
             "participant_id": pid,
-            "group": group,
-            "final_data": final_data,
-            "created_at": datetime.now().isoformat()
+            "preference": final_data.get("preference"),
+            "preference_reason": final_data.get("preference_reason"),
+            "trust_breakpoint": final_data.get("trust_breakpoint"),
+            "interruption_moment": final_data.get("interruption_moment"),
+            "open_comments": final_data.get("open_comments"),
+            "sus_json": final_data.get("sus"),
+            "toast_json": final_data.get("toast"),
+            "chat_quality_json": {k: v for k, v in final_data.items() if k.endswith("_c1") or k.endswith("_c2") or k.endswith("_c3") or k in ["recchatbox_c4", "recchatbox_c5"]},
+            "submitted_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
         log_app_error("write_final_survey", str(e), pid, group)
@@ -524,7 +582,10 @@ def render_recchatbox(poi):
     st.markdown("---")
     st.markdown("#### 💡 推荐问题")
     
-    # 🔑 关键修复：如果 followup_questions 为空，才从 POI 数据加载初始推荐问题
+    if "followup_generation" not in st.session_state:
+        st.session_state.followup_generation = 0
+
+    # 仅在当前 POI 尚未产生后续问题时加载初始推荐。
     if "followup_questions" not in st.session_state or not st.session_state.followup_questions:
         st.session_state.followup_questions = poi.get("recs", [
             f"关于{poi['name']}还有哪些历史细节？",
@@ -535,8 +596,9 @@ def render_recchatbox(poi):
     cols = st.columns(3)
     for i, q in enumerate(st.session_state.followup_questions[:3]):
         with cols[i]:
-            if st.button(f"❓ {q[:20]}{'...' if len(q) > 20 else ''}", key=f"rec_q_{i}"):
-                handle_question(q, poi, "recchatbox")
+            btn_key = f"rec_q_{st.session_state.followup_generation}_{i}"
+            if st.button(f"❓ {q[:20]}{'...' if len(q) > 20 else ''}", key=btn_key):
+                handle_question(q, poi, "recchatbox", query_type="suggested")
     
     st.markdown("#### 💬 向 AI 提问")
     
@@ -550,7 +612,7 @@ def render_recchatbox(poi):
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
     
     if prompt := st.chat_input("输入您的问题..."):
-        handle_question(prompt, poi, "recchatbox")
+        handle_question(prompt, poi, "recchatbox", query_type="free")
 
 # ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query, poi):
@@ -574,22 +636,69 @@ def simulate_rag_engine(user_query, poi):
                       exp_id=st.session_state.get("current_exposure_id", "UNKNOWN"))
         return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time() - start
 
+def normalize_followup_questions(raw_questions, poi_name, user_question=""):
+    fallback = [
+        f"关于{poi_name}还有哪些历史细节？",
+        "这里与无锡本地文化有什么关联？",
+        "有什么值得关注的参观细节？"
+    ]
+
+    if isinstance(raw_questions, dict):
+        raw_questions = (
+            raw_questions.get("questions")
+            or raw_questions.get("followup_questions")
+            or raw_questions.get("data")
+            or []
+        )
+    if isinstance(raw_questions, str):
+        raw_questions = [raw_questions]
+
+    cleaned = []
+    for item in raw_questions or []:
+        if isinstance(item, dict):
+            item = item.get("question") or item.get("text") or item.get("title") or ""
+        q = re.sub(r"^\s*[\-\*\d\.\、\)\]]+\s*", "", str(item)).strip()
+        if q and q != user_question and q not in cleaned:
+            cleaned.append(q)
+
+    for q in fallback:
+        if len(cleaned) >= 3:
+            break
+        if q not in cleaned:
+            cleaned.append(q)
+    return cleaned[:3]
+
+
 def generate_followup_questions(user_question, ai_answer, pid):
     key = st.secrets.get("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
+    poi_name = st.session_state.get("current_poi_name", "当前点位")
     try:
         resp = requests.post("https://api.dify.ai/v1/chat-messages",
             headers={"Authorization": key, "Content-Type": "application/json"},
             json={"inputs": {}, "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
                   "response_mode": "blocking", "user": pid}, timeout=10)
-        match = re.search(r'\[.*\]', resp.json().get("answer", "[]"))
-        return json.loads(match.group(0)) if match else []
+        answer = resp.json().get("answer", "[]").strip()
+        answer = re.sub(r"^```(?:json)?|```$", "", answer, flags=re.I | re.M).strip()
+
+        parsed = None
+        try:
+            parsed = json.loads(answer)
+        except Exception:
+            match = re.search(r"\[[\s\S]*?\]", answer)
+            if match:
+                parsed = json.loads(match.group(0))
+            else:
+                parsed = [
+                    re.sub(r"^\s*[\-\*\d\.\、\)\]]+\s*", "", line).strip()
+                    for line in answer.splitlines()
+                    if "?" in line or "？" in line
+                ]
+        return normalize_followup_questions(parsed, poi_name, user_question)
     except Exception as e:
         log_app_error("generate_followup_questions", str(e), pid=pid)
-        return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
-                "这里与无锡本地文化有什么关联？",
-                "有什么值得关注的参观细节？"]
+        return normalize_followup_questions([], poi_name, user_question)
 
-def handle_question(question, poi, cond):
+def handle_question(question, poi, cond, query_type=None):
     with st.spinner("AI 导览员正在查阅史料..."):
         ans, src, chunks, elap = simulate_rag_engine(question, poi)
         if "chat_messages" not in st.session_state:
@@ -600,7 +709,7 @@ def handle_question(question, poi, cond):
         write_interaction_turn(
             exposure_id=st.session_state.get("current_exposure_id", "UNKNOWN"),
             query_text=question,
-            query_type="free" if cond == "free_text" else "suggested",
+            query_type=query_type or ("free" if cond == "free_text" else "suggested"),
             response_text=ans,
             response_latency_ms=round(elap * 1000),
             retrieved_chunks=chunks,
@@ -609,11 +718,11 @@ def handle_question(question, poi, cond):
 
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
 
-        # 🔑 关键修复：如果是 RecChatbox，生成新的推荐问题并覆盖旧的
+        # RecChatbox 每轮回答后都生成下一轮 3 个推荐问题。
         if cond == "recchatbox":
             new_questions = generate_followup_questions(question, ans, st.session_state.participant_id)
-            if new_questions:
-                st.session_state.followup_questions = new_questions
+            st.session_state.followup_questions = new_questions
+            st.session_state.followup_generation = st.session_state.get("followup_generation", 0) + 1
         else:
             st.session_state.followup_questions = []
 
@@ -729,25 +838,25 @@ def show_poi_page():
     st.session_state.current_poi_name = poi["name"]
     st.session_state.current_condition = condition
 
-    # 每次进入 POI 生成新的 exposure_id，并重置聊天和推荐问题
-    exposure_id = str(uuid.uuid4())
-    st.session_state.current_exposure_id = exposure_id
-    st.session_state.chat_messages = []
-    st.session_state.followup_questions = []
-    if "poi_page_load_ts" not in st.session_state:
+    # 只在真正进入新 POI 时生成 exposure_id。聊天触发 st.rerun() 时不能清空状态。
+    if st.session_state.get("active_poi_index") != poi_idx:
+        exposure_id = str(uuid.uuid4())
+        st.session_state.current_exposure_id = exposure_id
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
         st.session_state.poi_page_load_ts = time.time()
-    else:
-        st.session_state.poi_page_load_ts = time.time()
+        st.session_state.active_poi_index = poi_idx
 
-    write_poi_exposure(
-        pid=st.session_state.participant_id,
-        group=st.session_state.group,
-        exposure_id=exposure_id,
-        poi_id=poi["id"],
-        condition=condition,
-        sequence_position=poi_idx + 1,
-        page_load_ts=st.session_state.poi_page_load_ts
-    )
+        write_poi_exposure(
+            pid=st.session_state.participant_id,
+            group=st.session_state.group,
+            exposure_id=exposure_id,
+            poi_id=poi["id"],
+            condition=condition,
+            sequence_position=poi_idx + 1,
+            page_load_ts=st.session_state.poi_page_load_ts
+        )
 
     # Hero + 天气
     st.markdown(f"""
@@ -789,7 +898,7 @@ def show_poi_page():
     # 下一站 → 微问卷
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
         dwell = time.time() - st.session_state.poi_page_load_ts
-        write_poi_completed(exposure_id, round(dwell, 2))
+        write_poi_completed(st.session_state.current_exposure_id, round(dwell, 2))
         st.session_state.pending_poi_index = poi_idx
         st.session_state.stage = "micro_survey"
         st.rerun()
@@ -854,6 +963,7 @@ def show_micro_survey():
                 # 重置聊天和推荐问题，为下一个 POI 做准备
                 st.session_state.chat_messages = []
                 st.session_state.followup_questions = []
+                st.session_state.followup_generation = 0
             st.rerun()
 
 def show_final_survey():
