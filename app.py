@@ -47,7 +47,7 @@ def get_weather_and_comfort():
     except:
         return "晴 20°C · 体感舒适 · 街区人流舒适"
 
-# ==================== CSS ====================
+# ==================== 完整 CSS ====================
 st.markdown("""
 <style>
 /* ===== Hue SkillC: Jiangnan Tech 3A Streamlit ===== */
@@ -159,30 +159,6 @@ st.markdown("""
   margin: 6px 0 12px;
 }
 
-/* 横向滚动推荐卡片 */
-div[data-testid="column"],
-div.row-widget.stHorizontalBlock {
-    flex-wrap: nowrap !important;
-    overflow-x: auto !important;
-    overflow-y: hidden !important;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    gap: 16px;
-}
-div[data-testid="column"] > div {
-    min-width: 130px !important;
-    width: 130px !important;
-    flex: 0 0 auto !important;
-}
-.recommend-name {
-    font-weight: 800;
-    font-size: 0.85rem;
-    margin: 8px 0 4px;
-    text-align: center;
-    white-space: normal;
-    word-break: keep-all;
-}
-
 /* 按钮样式 */
 div.stButton > button {
   background: linear-gradient(135deg, var(--jn-blue), var(--jn-green));
@@ -214,13 +190,6 @@ div.stButton > button:hover {
   margin-top: 8px;
 }
 @media (max-width: 640px) {
-    div[data-testid="column"] > div {
-        min-width: 110px !important;
-        width: 110px !important;
-    }
-    .recommend-name {
-        font-size: 0.75rem;
-    }
     div.stButton > button {
         padding: 0.5rem 0.8rem;
         font-size: 0.8rem;
@@ -232,7 +201,20 @@ div.stButton > button:hover {
 # ==================== 语音 JS ====================
 st.markdown("""
 <script>
+window.speechSynthesisPolyfill = function() {
+    if (!window.speechSynthesis) {
+        alert("您的浏览器不支持语音合成");
+        return false;
+    }
+    var dummy = new SpeechSynthesisUtterance("");
+    window.speechSynthesis.cancel();
+    return true;
+};
 window.speakText = function(text) {
+    if (!window.speechSynthesis) {
+        alert("您的浏览器不支持语音合成");
+        return;
+    }
     var utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
     utterance.rate = 0.9;
@@ -298,126 +280,216 @@ if "supabase" not in st.session_state:
     except Exception as e:
         st.session_state.supabase = None
         st.warning("Supabase 连接失败，日志将仅保存在本地")
-        # 错误记录到本地文件
-        with open("app_errors_local.log", "a") as f:
-            f.write(f"{datetime.now().isoformat()} | Supabase init failed: {e}\n")
+        log_app_error("supabase_init", str(e))
 
-# ==================== 错误日志函数（写入 app_errors 表）====================
-def log_app_error(context: str, error_message: str, extra: dict = None):
-    """记录应用错误到 Supabase app_errors 表"""
-    error_record = {
+# ==================== 错误日志辅助函数 ====================
+def log_app_error(context, error_detail):
+    """写入 app_errors 表，不静默失败"""
+    error_data = {
         "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
+        "group": st.session_state.get("group", "UNKNOWN"),
+        "exposure_id": st.session_state.get("current_exposure_id", "UNKNOWN"),
         "context": context,
-        "error_message": str(error_message),
-        "extra": json.dumps(extra) if extra else None,
+        "error_detail": str(error_detail),
         "timestamp": datetime.now().isoformat()
     }
-    # 本地备份
+    # 先保存本地
     os.makedirs("logs", exist_ok=True)
     with open("logs/app_errors.csv", "a", encoding="utf-8") as f:
-        f.write(f"{error_record['timestamp']},{error_record['participant_id']},{context},{error_message}\n")
-    # 尝试写入 Supabase
+        f.write(f"{error_data}\n")
+    # 尝试写 Supabase
     if st.session_state.get("supabase"):
         try:
-            st.session_state.supabase.table("app_errors").insert(error_record).execute()
-        except Exception as e:
-            # 不能再无限递归，直接忽略
+            st.session_state.supabase.table("app_errors").insert(error_data).execute()
+        except:
             pass
 
-# ==================== 数据写入函数（分别写入各表）====================
-def write_participant(participant_id, group, pretest_data):
+# ==================== 统一的日志写入函数（分8张表） ====================
+def write_participant(pid, group, pretest_data):
     try:
         st.session_state.supabase.table("participants").insert({
-            "participant_id": participant_id,
+            "participant_id": pid,
             "group": group,
             "pretest_data": pretest_data,
             "created_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
-        log_app_error("write_participant", str(e), {"participant_id": participant_id, "group": group})
+        log_app_error("write_participant", str(e))
 
-def write_route_session(participant_id, group, route_start_ts):
+def write_route_session(pid, group, route_start_ts):
     try:
-        res = st.session_state.supabase.table("route_sessions").insert({
-            "participant_id": participant_id,
+        resp = st.session_state.supabase.table("route_sessions").insert({
+            "participant_id": pid,
             "group": group,
             "route_start_ts": route_start_ts,
             "created_at": datetime.now().isoformat()
         }).execute()
-        if res.data:
-            return res.data[0]["id"]  # 返回 session_id
+        return resp.data[0]["id"] if resp.data else None
     except Exception as e:
-        log_app_error("write_route_session", str(e), {"participant_id": participant_id})
-    return None
+        log_app_error("write_route_session", str(e))
+        return None
 
-def write_poi_exposure(session_id, participant_id, group, poi_id, condition, exposure_start_ts):
+def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts):
     try:
-        res = st.session_state.supabase.table("poi_exposures").insert({
-            "session_id": session_id,
-            "participant_id": participant_id,
+        st.session_state.supabase.table("poi_exposures").insert({
+            "participant_id": pid,
             "group": group,
+            "exposure_id": exposure_id,
             "poi_id": poi_id,
             "condition": condition,
-            "exposure_start_ts": exposure_start_ts,
+            "sequence_position": sequence_position,
+            "page_load_ts": page_load_ts,
             "created_at": datetime.now().isoformat()
         }).execute()
-        if res.data:
-            return res.data[0]["id"]  # 返回 exposure_id
     except Exception as e:
-        log_app_error("write_poi_exposure", str(e), {"poi_id": poi_id})
-    return None
+        log_app_error("write_poi_exposure", str(e))
 
-def update_poi_exposure(exposure_id, dwell_seconds, next_click_ts):
-    try:
-        st.session_state.supabase.table("poi_exposures").update({
-            "dwell_seconds": dwell_seconds,
-            "next_click_ts": next_click_ts
-        }).eq("id", exposure_id).execute()
-    except Exception as e:
-        log_app_error("update_poi_exposure", str(e), {"exposure_id": exposure_id})
-
-def write_interaction_turn(exposure_id, participant_id, condition, query_type, query_text, response_text, latency_ms, retrieved_chunks, source_chip, error_flag=False):
+def write_interaction_turn(exposure_id, query_text, query_type, response_text, response_latency_ms, retrieved_chunks, source_chip):
     try:
         st.session_state.supabase.table("interaction_turns").insert({
             "exposure_id": exposure_id,
-            "participant_id": participant_id,
-            "condition": condition,
-            "query_type": query_type,
             "query_text": query_text,
+            "query_type": query_type,
             "response_text": response_text,
-            "response_latency_ms": latency_ms,
+            "response_latency_ms": response_latency_ms,
             "retrieved_chunks": retrieved_chunks,
             "source_chip": source_chip,
-            "error_flag": error_flag,
+            "timestamp": datetime.now().isoformat()
+        }).execute()
+    except Exception as e:
+        log_app_error("write_interaction_turn", str(e))
+
+def write_micro_survey(pid, group, exposure_id, poi_id, condition, micro_data):
+    try:
+        st.session_state.supabase.table("micro_surveys").insert({
+            "participant_id": pid,
+            "group": group,
+            "exposure_id": exposure_id,
+            "poi_id": poi_id,
+            "condition": condition,
+            **micro_data,
             "created_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
-        log_app_error("write_interaction_turn", str(e), {"exposure_id": exposure_id})
+        log_app_error("write_micro_survey", str(e))
 
-def write_micro_survey(exposure_id, participant_id, poi_id, condition, data_dict):
-    try:
-        record = {
-            "exposure_id": exposure_id,
-            "participant_id": participant_id,
-            "poi_id": poi_id,
-            "condition": condition,
-            **data_dict,
-            "created_at": datetime.now().isoformat()
-        }
-        st.session_state.supabase.table("micro_surveys").insert(record).execute()
-    except Exception as e:
-        log_app_error("write_micro_survey", str(e), {"exposure_id": exposure_id})
-
-def write_final_survey(participant_id, group, final_data):
+def write_final_survey(pid, group, final_data):
     try:
         st.session_state.supabase.table("final_surveys").insert({
-            "participant_id": participant_id,
+            "participant_id": pid,
             "group": group,
             "final_data": final_data,
             "created_at": datetime.now().isoformat()
         }).execute()
     except Exception as e:
-        log_app_error("write_final_survey", str(e), {"participant_id": participant_id})
+        log_app_error("write_final_survey", str(e))
+
+def write_poi_completed(pid, group, exposure_id, poi_id, condition, dwell_seconds):
+    try:
+        st.session_state.supabase.table("poi_exposures").update({
+            "next_click_ts": datetime.now().isoformat(),
+            "dwell_seconds": dwell_seconds
+        }).eq("exposure_id", exposure_id).execute()
+    except Exception as e:
+        log_app_error("write_poi_completed", str(e))
+
+# ==================== 三个渲染函数（修改 RecChatbox 推荐问题显示顺序） ====================
+def render_baseline(poi):
+    st.markdown(f"""
+    <div class="jn-card">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:28px;">📍</span>
+        <b style="font-size:22px;">{poi['name']}</b>
+      </div>
+      <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if "kb" in poi and len(poi["kb"]) > 0:
+        keywords = set()
+        for kb_item in poi["kb"]:
+            for kw in kb_item.get("keywords", [])[:2]:
+                keywords.add(kw)
+        st.markdown("**🏷️ 关键词**")
+        st.markdown(" ".join([f'<span class="source-chip">#{kw}</span>' for kw in list(keywords)[:6]]), unsafe_allow_html=True)
+    
+    st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
+    
+    voice_col, _ = st.columns([1, 5])
+    with voice_col:
+        if st.button("🔊 朗读介绍", key="speak_intro"):
+            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
+    
+    st.caption("✨ 静态展示模式 · 无 AI 对话")
+
+def render_free_text_rag(poi):
+    st.markdown(f"""
+    <div class="jn-card">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:28px;">📍</span>
+        <b style="font-size:22px;">{poi['name']}</b>
+      </div>
+      <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
+    
+    voice_col, _ = st.columns([1, 5])
+    with voice_col:
+        if st.button("🔊 朗读介绍", key="speak_intro"):
+            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("#### 💬 向 AI 提问")
+    
+    # 显示历史对话
+    for msg in st.session_state.get("chat_messages", []):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg["role"] == "assistant" and "source" in msg:
+                st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
+    
+    if prompt := st.chat_input("输入您的问题..."):
+        handle_question(prompt, poi, "free_text")
+
+def render_recchatbox(poi):
+    st.markdown(f"""
+    <div class="jn-card">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:28px;">📍</span>
+        <b style="font-size:22px;">{poi['name']}</b>
+      </div>
+      <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
+    
+    voice_col, _ = st.columns([1, 5])
+    with voice_col:
+        if st.button("🔊 朗读介绍", key="speak_intro"):
+            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("#### 💬 向 AI 提问")
+    
+    # 显示历史对话
+    for msg in st.session_state.get("chat_messages", []):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg["role"] == "assistant" and "source" in msg:
+                st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
+    
+    # 如果有推荐问题（当前轮次生成的），显示在回答下方
+    if st.session_state.get("current_followups"):
+        st.markdown("#### 💡 相关问题推荐")
+        for q in st.session_state.current_followups:
+            if st.button(f"❓ {q}", key=f"followup_{hash(q)}", use_container_width=True):
+                handle_question(q, poi, "recchatbox")
+    
+    if prompt := st.chat_input("输入您的问题..."):
+        handle_question(prompt, poi, "recchatbox")
 
 # ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query, poi):
@@ -433,11 +505,10 @@ def simulate_rag_engine(user_query, poi):
         ans = data.get("answer", "抱歉，无法回答。")
         resources = data.get("metadata", {}).get("retriever_resources", [])
         src = f"官方数字认证：{resources[0].get('dataset_name', '无锡史志库')}" if resources else "惠山古镇文献库"
-        return ans, src, str(resources), time.time()-start, False
+        return ans, src, str(resources), time.time()-start
     except Exception as e:
-        error_msg = f"Dify API error: {str(e)}"
-        log_app_error("simulate_rag_engine", error_msg, {"query": user_query, "poi": poi["name"]})
-        return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start, True
+        log_app_error("simulate_rag_engine", str(e))
+        return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start
 
 def generate_followup_questions(user_question, ai_answer, pid):
     key = st.secrets.get("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
@@ -447,142 +518,38 @@ def generate_followup_questions(user_question, ai_answer, pid):
             json={"inputs": {}, "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
                   "response_mode": "blocking", "user": pid}, timeout=10)
         match = re.search(r'\[.*\]', resp.json().get("answer", "[]"))
-        questions = json.loads(match.group(0)) if match else []
-        if len(questions) != 3:
-            questions = [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
-                         "这里与无锡本地文化有什么关联？",
-                         "有什么值得关注的参观细节？"]
-        return questions, False
+        return json.loads(match.group(0)) if match else []
     except Exception as e:
-        log_app_error("generate_followup_questions", str(e), {"user_question": user_question})
+        log_app_error("generate_followup_questions", str(e))
         return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
                 "这里与无锡本地文化有什么关联？",
-                "有什么值得关注的参观细节？"], True
-
-# ==================== 三个渲染函数（完整） ====================
-def render_baseline(poi):
-    st.markdown(f"""
-    <div class="jn-card">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <span style="font-size:28px;">📍</span>
-        <b style="font-size:22px;">{poi['name']}</b>
-      </div>
-      <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    if "kb" in poi and len(poi["kb"]) > 0:
-        keywords = set()
-        for kb_item in poi["kb"]:
-            for kw in kb_item.get("keywords", [])[:2]:
-                keywords.add(kw)
-        st.markdown("**🏷️ 关键词**")
-        st.markdown(" ".join([f'<span class="source-chip">#{kw}</span>' for kw in list(keywords)[:6]]), unsafe_allow_html=True)
-    st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-    voice_col, _ = st.columns([1, 5])
-    with voice_col:
-        if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-    st.caption("✨ 静态展示模式 · 无 AI 对话")
-
-def render_free_text_rag(poi):
-    st.markdown(f"""
-    <div class="jn-card">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <span style="font-size:28px;">📍</span>
-        <b style="font-size:22px;">{poi['name']}</b>
-      </div>
-      <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-    voice_col, _ = st.columns([1, 5])
-    with voice_col:
-        if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("#### 💬 向 AI 提问")
-    
-    exposure_id = st.session_state.get("current_exposure_id")
-    if exposure_id and "chat_messages" in st.session_state and exposure_id in st.session_state.chat_messages:
-        for msg in st.session_state.chat_messages[exposure_id]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                if msg["role"] == "assistant" and "source" in msg:
-                    st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
-    
-    if prompt := st.chat_input("输入您的问题..."):
-        handle_question(prompt, poi, "free_text")
-
-def render_recchatbox(poi):
-    st.markdown(f"""
-    <div class="jn-card">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <span style="font-size:28px;">📍</span>
-        <b style="font-size:22px;">{poi['name']}</b>
-      </div>
-      <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-    voice_col, _ = st.columns([1, 5])
-    with voice_col:
-        if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("#### 💬 向 AI 提问")
-    
-    exposure_id = st.session_state.get("current_exposure_id")
-    if exposure_id and "chat_messages" in st.session_state and exposure_id in st.session_state.chat_messages:
-        for msg in st.session_state.chat_messages[exposure_id]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                if msg["role"] == "assistant" and "source" in msg:
-                    st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
-    
-    # 显示推荐问题（若存在）
-    if exposure_id and "followup_questions" in st.session_state and exposure_id in st.session_state.followup_questions:
-        st.markdown("#### 💡 推荐问题")
-        for i, q in enumerate(st.session_state.followup_questions[exposure_id]):
-            if st.button(f"❓ {q}", key=f"rec_q_{exposure_id}_{i}"):
-                handle_question(q, poi, "recchatbox")
-    
-    if prompt := st.chat_input("输入您的问题..."):
-        handle_question(prompt, poi, "recchatbox")
+                "有什么值得关注的参观细节？"]
 
 def handle_question(question, poi, cond):
     with st.spinner("AI 导览员正在查阅史料..."):
-        ans, src, chunks, elap, error = simulate_rag_engine(question, poi)
-        exposure_id = st.session_state.get("current_exposure_id")
-        if exposure_id:
-            if "chat_messages" not in st.session_state:
-                st.session_state.chat_messages = {}
-            if exposure_id not in st.session_state.chat_messages:
-                st.session_state.chat_messages[exposure_id] = []
-            st.session_state.chat_messages[exposure_id].append({"role": "user", "content": question})
-            st.session_state.chat_messages[exposure_id].append({"role": "assistant", "content": ans, "source": src})
-            
-            # 记录交互回合
-            write_interaction_turn(
-                exposure_id=exposure_id,
-                participant_id=st.session_state.participant_id,
-                condition=cond,
-                query_type="free" if cond != "recchatbox" else "suggested",
-                query_text=question,
-                response_text=ans,
-                latency_ms=round(elap*1000),
-                retrieved_chunks=chunks,
-                source_chip=src,
-                error_flag=error
-            )
-            
-            # 如果是 recchatbox，生成后续推荐问题
-            if cond == "recchatbox":
-                new_qs, _ = generate_followup_questions(question, ans, st.session_state.participant_id)
-                if "followup_questions" not in st.session_state:
-                    st.session_state.followup_questions = {}
-                st.session_state.followup_questions[exposure_id] = new_qs
-        
+        ans, src, chunks, elap = simulate_rag_engine(question, poi)
+        # 更新会话状态
+        if "chat_messages" not in st.session_state:
+            st.session_state.chat_messages = []
+        st.session_state.chat_messages.append({"role": "user", "content": question})
+        st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
+        # 记录 interaction_turn
+        write_interaction_turn(
+            exposure_id=st.session_state.get("current_exposure_id", "UNKNOWN"),
+            query_text=question,
+            query_type="free" if cond == "free_text" else "suggested",
+            response_text=ans,
+            response_latency_ms=round(elap*1000),
+            retrieved_chunks=chunks,
+            source_chip=src
+        )
+        # 朗读
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
+        # 如果是 recchatbox，生成新的推荐问题并临时保存
+        if cond == "recchatbox":
+            st.session_state.current_followups = generate_followup_questions(question, ans, st.session_state.participant_id)
+        else:
+            st.session_state.current_followups = []
         st.rerun()
 
 # ==================== 页面渲染函数 ====================
@@ -659,13 +626,10 @@ def show_pretest():
             pretest = {"age":age, "gender":gender, "education":education, "discipline":discipline,
                        "heritage_visit_freq":heritage_visit_freq, "huishan_familiarity":huishan_familiarity,
                        "genai_familiarity":genai_familiarity, "mobile_guide_exp":mobile_guide_exp,
-                       **{f"cei_{i+1}":cei[i] for i in range(8)}, "group":group, "pretest_ts":time.time()}
+                       **{f"cei_{i+1}":cei[i] for i in range(8)}}
             st.session_state.pretest_data = pretest
             # 写入 participants 表
             write_participant(st.session_state.participant_id, group, pretest)
-            # 创建路线会话
-            session_id = write_route_session(st.session_state.participant_id, group, time.time())
-            st.session_state.route_session_id = session_id
             st.session_state.poi_index = 0
             st.session_state.stage = "route_intro"
             st.rerun()
@@ -698,27 +662,23 @@ def show_poi_page():
     st.session_state.current_poi_id = poi["id"]
     st.session_state.current_poi_name = poi["name"]
     st.session_state.current_condition = condition
+    # 生成 exposure_id 并重置该 POI 的会话状态
+    exposure_id = str(uuid.uuid4())
+    st.session_state.current_exposure_id = exposure_id
+    st.session_state.chat_messages = []
+    st.session_state.current_followups = []
     if "poi_page_load_ts" not in st.session_state:
         st.session_state.poi_page_load_ts = time.time()
-    
-    # 创建 POI exposure 记录
-    exposure_id = write_poi_exposure(
-        session_id=st.session_state.route_session_id,
-        participant_id=st.session_state.participant_id,
+    # 写入 poi_exposures
+    write_poi_exposure(
+        pid=st.session_state.participant_id,
         group=st.session_state.group,
+        exposure_id=exposure_id,
         poi_id=poi["id"],
         condition=condition,
-        exposure_start_ts=st.session_state.poi_page_load_ts
+        sequence_position=poi_idx+1,
+        page_load_ts=st.session_state.poi_page_load_ts
     )
-    st.session_state.current_exposure_id = exposure_id
-    # 初始化该 exposure 的聊天记录和推荐问题容器
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = {}
-    st.session_state.chat_messages[exposure_id] = []
-    if "followup_questions" not in st.session_state:
-        st.session_state.followup_questions = {}
-    st.session_state.followup_questions[exposure_id] = []
-    
     # Hero + 天气
     st.markdown(f"""
     <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
@@ -727,7 +687,6 @@ def show_poi_page():
     </div>
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {get_weather_and_comfort()}</div>', unsafe_allow_html=True)
-    
     # 条件渲染
     if condition == "baseline":
         render_baseline(poi_data)
@@ -736,11 +695,17 @@ def show_poi_page():
         render_free_text_rag(poi_data)
     else:
         render_recchatbox(poi_data)
-    
     # 下一站 → 微问卷
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
         dwell = time.time() - st.session_state.poi_page_load_ts
-        update_poi_exposure(exposure_id, dwell, time.time())
+        write_poi_completed(
+            pid=st.session_state.participant_id,
+            group=st.session_state.group,
+            exposure_id=exposure_id,
+            poi_id=poi["id"],
+            condition=condition,
+            dwell_seconds=round(dwell,2)
+        )
         st.session_state.pending_poi_index = poi_idx
         st.session_state.stage = "micro_survey"
         st.rerun()
@@ -763,7 +728,6 @@ def show_micro_survey():
         trust = st.slider("信息在历史文化上是可信的", 1,7,4)
         source_use = st.slider("来源标注让我更愿意相信信息", 1,7,4)
         learn_conf = st.slider("我能向别人说明该点位的核心文化意义", 1,7,4)
-        # 知识题
         q_map = {
             "fanwenzheng_gongci": ("范文正公祠主要祭祀哪位历史人物？",["范仲淹","苏轼","陆羽","阿炳"],"范仲淹"),
             "guhuashanmen": ("金莲桥最适合作为哪类体验节点？",["空间过渡","商业消费","现代交通","纯自然景观"],"空间过渡"),
@@ -776,26 +740,35 @@ def show_micro_survey():
         if st.form_submit_button("提交并继续"):
             is_correct = (answer == correct)
             micro_data = {
-                "mental_demand": mental, "temporal_pressure": time_p, "effort": effort,
-                "frustration": frust, "perceived_control": control, "interruption": interrupt,
-                "situated_engagement": engage, "info_satisfaction": satisfy,
-                "cultural_trust": trust, "source_usefulness": source_use,
-                "learning_confidence": learn_conf, "knowledge_correct": is_correct,
+                "mental_demand": mental,
+                "temporal_pressure": time_p,
+                "effort": effort,
+                "frustration": frust,
+                "perceived_control": control,
+                "interruption": interrupt,
+                "situated_engagement": engage,
+                "info_satisfaction": satisfy,
+                "cultural_trust": trust,
+                "source_usefulness": source_use,
+                "learning_confidence": learn_conf,
+                "knowledge_correct": is_correct,
                 "knowledge_answer": answer
             }
             write_micro_survey(
+                pid=st.session_state.participant_id,
+                group=st.session_state.group,
                 exposure_id=st.session_state.current_exposure_id,
-                participant_id=st.session_state.participant_id,
                 poi_id=poi_id,
                 condition=st.session_state.current_condition,
-                data_dict=micro_data
+                micro_data=micro_data
             )
             st.session_state.poi_index = poi_idx + 1
             if st.session_state.poi_index >= len(POIS):
                 st.session_state.stage = "final_survey"
             else:
                 st.session_state.stage = "poi"
-                # 重置 POI 页面时间戳，不清空 exposure 相关 state（新 POI 会重新创建）
+                st.session_state.chat_messages = []
+                st.session_state.current_followups = []
                 st.session_state.poi_page_load_ts = time.time()
             st.rerun()
 
@@ -804,52 +777,56 @@ def show_final_survey():
     st.markdown("请分别评价您体验过的三种界面。")
     conditions = ["baseline", "free_text", "recchatbox"]
     names = {"baseline":"A: 原始网页", "free_text":"B: 自由提问 AI", "recchatbox":"C: 推荐式交互"}
-    
-    # Tell me more C1-C5 存储
-    tm_ratings = {}
-    
     with st.form("final_form"):
+        # 存储各条件的 C1-C5 答案
+        c_answers = {}
         for cond in conditions:
             st.markdown(f"#### {names[cond]}")
+            # SUS 10题
             for i, sus_item in enumerate([
                 "我愿意继续使用该界面。","该界面显得不必要地复杂。","该界面容易上手。",
                 "我需要他人帮助才能顺利使用。","功能整合得很好。","在不同点位表现不一致。",
                 "多数游客能很快学会。","使用起来很累赘。","使用时有信心。","使用前需要学习很多东西。"]):
                 st.slider(f"SUS {i+1}: {sus_item}", 1,5,3, key=f"sus_{cond}_{i}")
+            # TOAST 5题
             for i, toast_item in enumerate([
                 "帮助我完成文化信息探索目标。","表现稳定一致。","反应符合我的预期。",
                 "信息很少让我意外或困惑。","我愿意依赖该界面提供的信息。"]):
                 st.slider(f"TOAST {i+1}: {toast_item}", 1,7,4, key=f"toast_{cond}_{i}")
-        
-        # Tell me more C1-C5
-        st.markdown("---")
-        st.markdown("#### 交互体验评价（Tell me more C1-C5）")
-        for cond in ["free_text", "recchatbox"]:
-            st.markdown(f"**{names[cond]}**")
-            tm_ratings[f"q_easy_{cond}"] = st.slider("提出问题是容易的。", 1,5,3, key=f"q_easy_{cond}")
-            tm_ratings[f"ans_understand_{cond}"] = st.slider("我理解系统给出的回答。", 1,5,3, key=f"ans_understand_{cond}")
-            tm_ratings[f"ans_interest_{cond}"] = st.slider("系统回答让我觉得内容更有趣。", 1,5,3, key=f"ans_interest_{cond}")
-        st.markdown(f"**{names['recchatbox']}**")
-        tm_ratings["recq_understand_C"] = st.slider("系统推荐的问题是清楚易懂的。", 1,5,3, key="recq_understand_C")
-        tm_ratings["recq_interest_C"] = st.slider("系统推荐的问题能激发我继续探索。", 1,5,3, key="recq_interest_C")
-        
+            # Tell me more C1-C3 (仅 B/C)
+            if cond != "baseline":
+                st.markdown("**交互体验评价**")
+                c1 = st.slider("提出问题是容易的。", 1,5,3, key=f"q_easy_{cond}")
+                c2 = st.slider("我理解系统给出的回答。", 1,5,3, key=f"ans_understand_{cond}")
+                c3 = st.slider("系统回答让我觉得内容更有趣。", 1,5,3, key=f"ans_interest_{cond}")
+                c_answers[f"{cond}_c1"] = c1
+                c_answers[f"{cond}_c2"] = c2
+                c_answers[f"{cond}_c3"] = c3
+                # Tell me more C4-C5 (仅 C)
+                if cond == "recchatbox":
+                    c4 = st.slider("系统推荐的问题是清楚易懂的。", 1,5,3, key=f"recq_understand")
+                    c5 = st.slider("系统推荐的问题能激发我继续探索。", 1,5,3, key=f"recq_interest")
+                    c_answers["recchatbox_c4"] = c4
+                    c_answers["recchatbox_c5"] = c5
+            st.markdown("---")
         st.markdown("#### 偏好与开放题")
         pref = st.radio("最愿意使用哪一种？", ["原始网页","自由提问 AI","推荐式交互"], key="pref")
         pref_reason = st.text_area("请说明原因")
         trust_break = st.text_area("有没有哪一刻你开始相信或不相信系统？")
         interrupt_moment = st.text_area("有没有哪一刻手机信息干扰了你看真实场景？")
         comments = st.text_area("其他意见或建议")
-        
         if st.form_submit_button("提交评价"):
-            final = {
-                "preference": pref, "preference_reason": pref_reason,
-                "trust_breakpoint": trust_break, "interruption_moment": interrupt_moment,
+            final_data = {
+                "preference": pref,
+                "preference_reason": pref_reason,
+                "trust_breakpoint": trust_break,
+                "interruption_moment": interrupt_moment,
                 "open_comments": comments,
                 "sus": {f"{cond}_{i}": st.session_state.get(f"sus_{cond}_{i}") for cond in conditions for i in range(10)},
                 "toast": {f"{cond}_{i}": st.session_state.get(f"toast_{cond}_{i}") for cond in conditions for i in range(5)},
-                "tellmemore": tm_ratings
+                **c_answers
             }
-            write_final_survey(st.session_state.participant_id, st.session_state.group, final)
+            write_final_survey(st.session_state.participant_id, st.session_state.group, final_data)
             st.session_state.stage = "done"
             st.rerun()
 
