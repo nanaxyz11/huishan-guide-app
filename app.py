@@ -441,7 +441,7 @@ def write_poi_completed(exposure_id, dwell_seconds):
     except Exception as e:
         log_app_error("write_poi_completed", str(e), exp_id=exposure_id)
 
-# ==================== 三个渲染函数 ====================
+# ==================== 三个渲染函数（完整，推荐问题循环衍生） ====================
 def render_baseline(poi):
     st.markdown(f"""
     <div class="jn-card">
@@ -452,7 +452,7 @@ def render_baseline(poi):
       <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
     </div>
     """, unsafe_allow_html=True)
-
+    
     if "kb" in poi and len(poi["kb"]) > 0:
         keywords = set()
         for kb_item in poi["kb"]:
@@ -460,14 +460,14 @@ def render_baseline(poi):
                 keywords.add(kw)
         st.markdown("**🏷️ 关键词**")
         st.markdown(" ".join([f'<span class="source-chip">#{kw}</span>' for kw in list(keywords)[:6]]), unsafe_allow_html=True)
-
+    
     st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-
+    
     voice_col, _ = st.columns([1, 5])
     with voice_col:
         if st.button("🔊 朗读介绍", key="speak_intro"):
             st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-
+    
     st.caption("✨ 静态展示模式 · 无 AI 对话")
 
 def render_free_text_rag(poi):
@@ -480,26 +480,26 @@ def render_free_text_rag(poi):
       <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
     </div>
     """, unsafe_allow_html=True)
-
+    
     st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-
+    
     voice_col, _ = st.columns([1, 5])
     with voice_col:
         if st.button("🔊 朗读介绍", key="speak_intro"):
             st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-
+    
     st.markdown("---")
     st.markdown("#### 💬 向 AI 提问")
-
+    
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
-
+    
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and "source" in msg:
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
-
+    
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt, poi, "free_text")
 
@@ -513,42 +513,42 @@ def render_recchatbox(poi):
       <div style="margin-top:12px; line-height:1.65;">{poi['info']}</div>
     </div>
     """, unsafe_allow_html=True)
-
+    
     st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-
+    
     voice_col, _ = st.columns([1, 5])
     with voice_col:
         if st.button("🔊 朗读介绍", key="speak_intro"):
             st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-
+    
     st.markdown("---")
     st.markdown("#### 💡 推荐问题")
-
-    # 初始化推荐问题（如果还没有，则从 POI 数据加载）
+    
+    # 🔑 关键修复：如果 followup_questions 为空，才从 POI 数据加载初始推荐问题
     if "followup_questions" not in st.session_state or not st.session_state.followup_questions:
         st.session_state.followup_questions = poi.get("recs", [
             f"关于{poi['name']}还有哪些历史细节？",
             f"这里与无锡本地文化有什么关联？",
             f"有什么值得关注的参观细节？"
         ])
-
+    
     cols = st.columns(3)
     for i, q in enumerate(st.session_state.followup_questions[:3]):
         with cols[i]:
             if st.button(f"❓ {q[:20]}{'...' if len(q) > 20 else ''}", key=f"rec_q_{i}"):
                 handle_question(q, poi, "recchatbox")
-
+    
     st.markdown("#### 💬 向 AI 提问")
-
+    
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
-
+    
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and "source" in msg:
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
-
+    
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt, poi, "recchatbox")
 
@@ -609,7 +609,7 @@ def handle_question(question, poi, cond):
 
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
 
-        # 关键：如果是 RecChatbox，生成新的推荐问题并覆盖旧的，实现循环衍生
+        # 🔑 关键修复：如果是 RecChatbox，生成新的推荐问题并覆盖旧的
         if cond == "recchatbox":
             new_questions = generate_followup_questions(question, ans, st.session_state.participant_id)
             if new_questions:
@@ -733,7 +733,7 @@ def show_poi_page():
     exposure_id = str(uuid.uuid4())
     st.session_state.current_exposure_id = exposure_id
     st.session_state.chat_messages = []
-    st.session_state.followup_questions = []   # 清空，渲染时会从 POI 数据重新加载
+    st.session_state.followup_questions = []
     if "poi_page_load_ts" not in st.session_state:
         st.session_state.poi_page_load_ts = time.time()
     else:
