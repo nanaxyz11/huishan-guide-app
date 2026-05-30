@@ -254,6 +254,60 @@ GROUP_CONDITION_MAP = {
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 
+# ==================== 错误日志辅助函数（安全版本，不依赖 session_state 初始化）====================
+def log_app_error(context, error_detail):
+    """写入 app_errors 表，安全访问 session_state（若未初始化则只写本地）"""
+    # 尝试安全获取当前 participant_id, group, exposure_id
+    try:
+        pid = st.session_state.get("participant_id", "UNKNOWN") if hasattr(st, "session_state") else "UNKNOWN"
+        grp = st.session_state.get("group", "UNKNOWN") if hasattr(st, "session_state") else "UNKNOWN"
+        exp_id = st.session_state.get("current_exposure_id", "UNKNOWN") if hasattr(st, "session_state") else "UNKNOWN"
+    except:
+        pid = grp = exp_id = "UNKNOWN"
+    
+    error_data = {
+        "participant_id": pid,
+        "group": grp,
+        "exposure_id": exp_id,
+        "context": context,
+        "error_detail": str(error_detail),
+        "timestamp": datetime.now().isoformat()
+    }
+    # 先保存本地
+    os.makedirs("logs", exist_ok=True)
+    with open("logs/app_errors.csv", "a", encoding="utf-8") as f:
+        f.write(f"{error_data}\n")
+    # 尝试写 Supabase（如果可用）
+    try:
+        if "supabase" in st.session_state and st.session_state.supabase:
+            st.session_state.supabase.table("app_errors").insert(error_data).execute()
+    except:
+        pass
+
+# ==================== Supabase 客户端（延迟初始化，在 main 中完成）====================
+def init_supabase():
+    if "supabase" not in st.session_state:
+        try:
+            st.session_state.supabase = create_client(
+                st.secrets["SUPABASE_URL"],
+                st.secrets["SUPABASE_KEY"]
+            )
+        except Exception as e:
+            st.session_state.supabase = None
+            # 不在这里调用 log_app_error，因为此时 session_state 可能还没准备好，但可以写本地
+            error_data = {
+                "participant_id": "UNKNOWN",
+                "group": "UNKNOWN",
+                "exposure_id": "UNKNOWN",
+                "context": "supabase_init",
+                "error_detail": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/app_errors.csv", "a", encoding="utf-8") as f:
+                f.write(f"{error_data}\n")
+            st.warning("Supabase 连接失败，日志将仅保存在本地")
+
 # ==================== 均衡分组 ====================
 def assign_group_balanced():
     supabase = st.session_state.get("supabase")
@@ -270,42 +324,10 @@ def assign_group_balanced():
             log_app_error("assign_group_balanced", str(e))
     return random.choice(VALID_GROUPS)
 
-# ==================== Supabase 客户端 ====================
-if "supabase" not in st.session_state:
-    try:
-        st.session_state.supabase = create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_KEY"]
-        )
-    except Exception as e:
-        st.session_state.supabase = None
-        st.warning("Supabase 连接失败，日志将仅保存在本地")
-        log_app_error("supabase_init", str(e))
-
-# ==================== 错误日志辅助函数 ====================
-def log_app_error(context, error_detail):
-    """写入 app_errors 表，不静默失败"""
-    error_data = {
-        "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
-        "group": st.session_state.get("group", "UNKNOWN"),
-        "exposure_id": st.session_state.get("current_exposure_id", "UNKNOWN"),
-        "context": context,
-        "error_detail": str(error_detail),
-        "timestamp": datetime.now().isoformat()
-    }
-    # 先保存本地
-    os.makedirs("logs", exist_ok=True)
-    with open("logs/app_errors.csv", "a", encoding="utf-8") as f:
-        f.write(f"{error_data}\n")
-    # 尝试写 Supabase
-    if st.session_state.get("supabase"):
-        try:
-            st.session_state.supabase.table("app_errors").insert(error_data).execute()
-        except:
-            pass
-
 # ==================== 统一的日志写入函数（分8张表） ====================
 def write_participant(pid, group, pretest_data):
+    if not st.session_state.get("supabase"):
+        return
     try:
         st.session_state.supabase.table("participants").insert({
             "participant_id": pid,
@@ -317,6 +339,8 @@ def write_participant(pid, group, pretest_data):
         log_app_error("write_participant", str(e))
 
 def write_route_session(pid, group, route_start_ts):
+    if not st.session_state.get("supabase"):
+        return None
     try:
         resp = st.session_state.supabase.table("route_sessions").insert({
             "participant_id": pid,
@@ -330,6 +354,8 @@ def write_route_session(pid, group, route_start_ts):
         return None
 
 def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts):
+    if not st.session_state.get("supabase"):
+        return
     try:
         st.session_state.supabase.table("poi_exposures").insert({
             "participant_id": pid,
@@ -345,6 +371,8 @@ def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_posi
         log_app_error("write_poi_exposure", str(e))
 
 def write_interaction_turn(exposure_id, query_text, query_type, response_text, response_latency_ms, retrieved_chunks, source_chip):
+    if not st.session_state.get("supabase"):
+        return
     try:
         st.session_state.supabase.table("interaction_turns").insert({
             "exposure_id": exposure_id,
@@ -360,6 +388,8 @@ def write_interaction_turn(exposure_id, query_text, query_type, response_text, r
         log_app_error("write_interaction_turn", str(e))
 
 def write_micro_survey(pid, group, exposure_id, poi_id, condition, micro_data):
+    if not st.session_state.get("supabase"):
+        return
     try:
         st.session_state.supabase.table("micro_surveys").insert({
             "participant_id": pid,
@@ -374,6 +404,8 @@ def write_micro_survey(pid, group, exposure_id, poi_id, condition, micro_data):
         log_app_error("write_micro_survey", str(e))
 
 def write_final_survey(pid, group, final_data):
+    if not st.session_state.get("supabase"):
+        return
     try:
         st.session_state.supabase.table("final_surveys").insert({
             "participant_id": pid,
@@ -385,6 +417,8 @@ def write_final_survey(pid, group, final_data):
         log_app_error("write_final_survey", str(e))
 
 def write_poi_completed(pid, group, exposure_id, poi_id, condition, dwell_seconds):
+    if not st.session_state.get("supabase"):
+        return
     try:
         st.session_state.supabase.table("poi_exposures").update({
             "next_click_ts": datetime.now().isoformat(),
@@ -393,7 +427,7 @@ def write_poi_completed(pid, group, exposure_id, poi_id, condition, dwell_second
     except Exception as e:
         log_app_error("write_poi_completed", str(e))
 
-# ==================== 三个渲染函数（修改 RecChatbox 推荐问题显示顺序） ====================
+# ==================== 三个渲染函数（完整，推荐问题竖向排列） ====================
 def render_baseline(poi):
     st.markdown(f"""
     <div class="jn-card">
@@ -443,7 +477,6 @@ def render_free_text_rag(poi):
     st.markdown("---")
     st.markdown("#### 💬 向 AI 提问")
     
-    # 显示历史对话
     for msg in st.session_state.get("chat_messages", []):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -474,14 +507,12 @@ def render_recchatbox(poi):
     st.markdown("---")
     st.markdown("#### 💬 向 AI 提问")
     
-    # 显示历史对话
     for msg in st.session_state.get("chat_messages", []):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and "source" in msg:
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
     
-    # 如果有推荐问题（当前轮次生成的），显示在回答下方
     if st.session_state.get("current_followups"):
         st.markdown("#### 💡 相关问题推荐")
         for q in st.session_state.current_followups:
@@ -528,12 +559,10 @@ def generate_followup_questions(user_question, ai_answer, pid):
 def handle_question(question, poi, cond):
     with st.spinner("AI 导览员正在查阅史料..."):
         ans, src, chunks, elap = simulate_rag_engine(question, poi)
-        # 更新会话状态
         if "chat_messages" not in st.session_state:
             st.session_state.chat_messages = []
         st.session_state.chat_messages.append({"role": "user", "content": question})
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
-        # 记录 interaction_turn
         write_interaction_turn(
             exposure_id=st.session_state.get("current_exposure_id", "UNKNOWN"),
             query_text=question,
@@ -543,9 +572,7 @@ def handle_question(question, poi, cond):
             retrieved_chunks=chunks,
             source_chip=src
         )
-        # 朗读
         st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
-        # 如果是 recchatbox，生成新的推荐问题并临时保存
         if cond == "recchatbox":
             st.session_state.current_followups = generate_followup_questions(question, ans, st.session_state.participant_id)
         else:
@@ -628,7 +655,6 @@ def show_pretest():
                        "genai_familiarity":genai_familiarity, "mobile_guide_exp":mobile_guide_exp,
                        **{f"cei_{i+1}":cei[i] for i in range(8)}}
             st.session_state.pretest_data = pretest
-            # 写入 participants 表
             write_participant(st.session_state.participant_id, group, pretest)
             st.session_state.poi_index = 0
             st.session_state.stage = "route_intro"
@@ -662,14 +688,12 @@ def show_poi_page():
     st.session_state.current_poi_id = poi["id"]
     st.session_state.current_poi_name = poi["name"]
     st.session_state.current_condition = condition
-    # 生成 exposure_id 并重置该 POI 的会话状态
     exposure_id = str(uuid.uuid4())
     st.session_state.current_exposure_id = exposure_id
     st.session_state.chat_messages = []
     st.session_state.current_followups = []
     if "poi_page_load_ts" not in st.session_state:
         st.session_state.poi_page_load_ts = time.time()
-    # 写入 poi_exposures
     write_poi_exposure(
         pid=st.session_state.participant_id,
         group=st.session_state.group,
@@ -679,7 +703,6 @@ def show_poi_page():
         sequence_position=poi_idx+1,
         page_load_ts=st.session_state.poi_page_load_ts
     )
-    # Hero + 天气
     st.markdown(f"""
     <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
       <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
@@ -687,7 +710,6 @@ def show_poi_page():
     </div>
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {get_weather_and_comfort()}</div>', unsafe_allow_html=True)
-    # 条件渲染
     if condition == "baseline":
         render_baseline(poi_data)
         st.caption("✨ 静态展示模式 · 无 AI 对话")
@@ -695,7 +717,6 @@ def show_poi_page():
         render_free_text_rag(poi_data)
     else:
         render_recchatbox(poi_data)
-    # 下一站 → 微问卷
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
         dwell = time.time() - st.session_state.poi_page_load_ts
         write_poi_completed(
@@ -778,22 +799,18 @@ def show_final_survey():
     conditions = ["baseline", "free_text", "recchatbox"]
     names = {"baseline":"A: 原始网页", "free_text":"B: 自由提问 AI", "recchatbox":"C: 推荐式交互"}
     with st.form("final_form"):
-        # 存储各条件的 C1-C5 答案
         c_answers = {}
         for cond in conditions:
             st.markdown(f"#### {names[cond]}")
-            # SUS 10题
             for i, sus_item in enumerate([
                 "我愿意继续使用该界面。","该界面显得不必要地复杂。","该界面容易上手。",
                 "我需要他人帮助才能顺利使用。","功能整合得很好。","在不同点位表现不一致。",
                 "多数游客能很快学会。","使用起来很累赘。","使用时有信心。","使用前需要学习很多东西。"]):
                 st.slider(f"SUS {i+1}: {sus_item}", 1,5,3, key=f"sus_{cond}_{i}")
-            # TOAST 5题
             for i, toast_item in enumerate([
                 "帮助我完成文化信息探索目标。","表现稳定一致。","反应符合我的预期。",
                 "信息很少让我意外或困惑。","我愿意依赖该界面提供的信息。"]):
                 st.slider(f"TOAST {i+1}: {toast_item}", 1,7,4, key=f"toast_{cond}_{i}")
-            # Tell me more C1-C3 (仅 B/C)
             if cond != "baseline":
                 st.markdown("**交互体验评价**")
                 c1 = st.slider("提出问题是容易的。", 1,5,3, key=f"q_easy_{cond}")
@@ -802,7 +819,6 @@ def show_final_survey():
                 c_answers[f"{cond}_c1"] = c1
                 c_answers[f"{cond}_c2"] = c2
                 c_answers[f"{cond}_c3"] = c3
-                # Tell me more C4-C5 (仅 C)
                 if cond == "recchatbox":
                     c4 = st.slider("系统推荐的问题是清楚易懂的。", 1,5,3, key=f"recq_understand")
                     c5 = st.slider("系统推荐的问题能激发我继续探索。", 1,5,3, key=f"recq_interest")
@@ -837,6 +853,9 @@ def show_done():
 
 # ==================== 主入口 ====================
 def main():
+    # 延迟初始化 Supabase
+    init_supabase()
+    
     if "participant_id" not in st.session_state:
         st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
     if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
