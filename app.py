@@ -20,14 +20,6 @@ def get_github_raw_url(filename: str) -> str:
     return base + quote(filename)
 
 MAIN_IMG_URL = get_github_raw_url("主图.jpg")
-RECOMMEND_IMG_URLS = {
-    "天下第二泉": get_github_raw_url("二泉.jpg"),
-    "古华山门": get_github_raw_url("金莲桥.jpg"),
-    "知鱼槛": get_github_raw_url("知鱼栏.jpg"),      # 显示名称修正
-    "竹炉山房": get_github_raw_url("竹炉山房.jpg"),
-    "范文正公祠": get_github_raw_url("范文公正祠.jpg")
-}
-
 LOCAL_IMG_BASE = "/Users/clisl/Documents/huishan_3a_exp/惠山古镇5POI图"
 def get_img_url_or_local(filename: str, github_url: str) -> str:
     if os.path.exists(os.path.join(LOCAL_IMG_BASE, filename)):
@@ -166,30 +158,6 @@ st.markdown("""
   margin: 6px 0 12px;
 }
 
-/* 横向滚动推荐卡片 */
-div[data-testid="column"],
-div.row-widget.stHorizontalBlock {
-    flex-wrap: nowrap !important;
-    overflow-x: auto !important;
-    overflow-y: hidden !important;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    gap: 16px;
-}
-div[data-testid="column"] > div {
-    min-width: 130px !important;
-    width: 130px !important;
-    flex: 0 0 auto !important;
-}
-.recommend-name {
-    font-weight: 800;
-    font-size: 0.85rem;
-    margin: 8px 0 4px;
-    text-align: center;
-    white-space: normal;
-    word-break: keep-all;
-}
-
 /* 按钮样式 */
 div.stButton > button {
   background: linear-gradient(135deg, var(--jn-blue), var(--jn-green));
@@ -221,13 +189,6 @@ div.stButton > button:hover {
   margin-top: 8px;
 }
 @media (max-width: 640px) {
-    div[data-testid="column"] > div {
-        min-width: 110px !important;
-        width: 110px !important;
-    }
-    .recommend-name {
-        font-size: 0.75rem;
-    }
     div.stButton > button {
         padding: 0.5rem 0.8rem;
         font-size: 0.8rem;
@@ -292,6 +253,17 @@ GROUP_CONDITION_MAP = {
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 
+# ==================== Supabase 客户端 ====================
+if "supabase" not in st.session_state:
+    try:
+        st.session_state.supabase = create_client(
+            st.secrets["SUPABASE_URL"],
+            st.secrets["SUPABASE_KEY"]
+        )
+    except Exception as e:
+        st.session_state.supabase = None
+        st.warning(f"Supabase 连接失败: {e}")
+
 # ==================== 均衡分组 ====================
 def assign_group_balanced():
     supabase = st.session_state.get("supabase")
@@ -304,55 +276,206 @@ def assign_group_balanced():
                     if row.get("group") in cnt:
                         cnt[row["group"]] += 1
                 return min(cnt, key=cnt.get)
-        except:
-            pass
+        except Exception as e:
+            log_app_error("assign_group_balanced", e)
     return random.choice(VALID_GROUPS)
 
-# ==================== Supabase 客户端 ====================
-if "supabase" not in st.session_state:
-    try:
-        st.session_state.supabase = create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_KEY"]
-        )
-    except:
-        st.session_state.supabase = None
-        st.warning("Supabase 连接失败，日志将仅保存在本地")
-
-# ==================== 统一日志 ====================
-def log_event(event_type, payload=None):
-    if payload is None: payload = {}
-    log_data = {
+# ==================== 错误记录 ====================
+def log_app_error(operation, error, extra=None):
+    if extra is None: extra = {}
+    error_data = {
         "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
-        "group": st.session_state.get("group", "UNKNOWN"),
-        "poi_id": st.session_state.get("current_poi_id", "UNKNOWN"),
-        "condition": st.session_state.get("current_condition", "UNKNOWN"),
-        "event_type": event_type,
-        "timestamp": datetime.now().isoformat(),
-        **payload
+        "operation": operation,
+        "error_message": str(error),
+        "extra": extra,
+        "timestamp": datetime.now().isoformat()
     }
-    if "logs" not in st.session_state: st.session_state.logs = []
-    st.session_state.logs.append(log_data)
+    if "errors_log" not in st.session_state:
+        st.session_state.errors_log = []
+    st.session_state.errors_log.append(error_data)
     os.makedirs("logs", exist_ok=True)
-    df = pd.DataFrame(st.session_state.logs)
-    df.to_csv(f"logs/{st.session_state.get('participant_id', 'unknown')}_log.csv", index=False, encoding="utf-8-sig")
-    if st.session_state.get("supabase"):
+    df = pd.DataFrame(st.session_state.errors_log)
+    df.to_csv(f"logs/{st.session_state.get('participant_id', 'unknown')}_errors.csv", index=False, encoding="utf-8-sig")
+    supabase = st.session_state.get("supabase")
+    if supabase:
         try:
-            if event_type == "pretest_completed":
-                st.session_state.supabase.table("participants").insert({
-                    "participant_id": st.session_state.participant_id,
-                    "group": st.session_state.group,
-                    "pretest_data": payload.get("pretest_data", {}),
-                    "created_at": datetime.now().isoformat()
-                }).execute()
-            elif event_type == "micro_survey_submitted":
-                st.session_state.supabase.table("micro_survey").insert(log_data).execute()
-            elif event_type == "final_survey_completed":
-                st.session_state.supabase.table("final_survey").insert(log_data).execute()
-            else:
-                st.session_state.supabase.table("interaction_logs").insert(log_data).execute()
+            supabase.table("app_errors").insert(error_data).execute()
         except:
             pass
+
+# ==================== 统一日志（多表拆分）====================
+def log_event(event_type, payload=None):
+    if payload is None: payload = {}
+    base_fields = {
+        "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
+        "group": st.session_state.get("group", "UNKNOWN"),
+        "timestamp": datetime.now().isoformat(),
+        "payload": payload
+    }
+    supabase = st.session_state.get("supabase")
+    os.makedirs("logs", exist_ok=True)
+    log_line = {**base_fields, "event_type": event_type}
+    with open(f"logs/{st.session_state.get('participant_id', 'unknown')}_all_events.log", "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_line, ensure_ascii=False) + "\n")
+    
+    if not supabase:
+        return
+    
+    try:
+        if event_type == "pretest_completed":
+            supabase.table("participants").insert({
+                "participant_id": st.session_state.participant_id,
+                "group": st.session_state.group,
+                "pretest_data": payload.get("pretest_data", {}),
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        elif event_type == "route_started":
+            supabase.table("route_sessions").insert({
+                "participant_id": st.session_state.participant_id,
+                "group": st.session_state.group,
+                "start_time": datetime.now().isoformat(),
+                "payload": payload
+            }).execute()
+        elif event_type == "poi_entered":
+            exposure_id = str(uuid.uuid4())
+            st.session_state.current_exposure_id = exposure_id
+            supabase.table("poi_exposures").insert({
+                "exposure_id": exposure_id,
+                "participant_id": st.session_state.participant_id,
+                "group": st.session_state.group,
+                "poi_id": payload.get("poi_id"),
+                "condition": payload.get("condition"),
+                "sequence_position": payload.get("sequence_position"),
+                "enter_time": datetime.now().isoformat(),
+                "payload": payload
+            }).execute()
+        elif event_type == "poi_completed":
+            exposure_id = st.session_state.get("current_exposure_id")
+            if exposure_id:
+                supabase.table("poi_exposures").update({
+                    "exit_time": datetime.now().isoformat(),
+                    "dwell_seconds": payload.get("dwell_seconds")
+                }).eq("exposure_id", exposure_id).execute()
+        elif event_type == "question_submitted":
+            supabase.table("interaction_turns").insert({
+                "turn_id": str(uuid.uuid4()),
+                "exposure_id": st.session_state.get("current_exposure_id"),
+                "participant_id": st.session_state.participant_id,
+                "query_text": payload.get("query_text"),
+                "response_text": payload.get("response_text"),
+                "response_latency_ms": payload.get("response_latency_ms"),
+                "retrieved_chunks": payload.get("retrieved_chunks"),
+                "source_chip": payload.get("source_chip"),
+                "timestamp": datetime.now().isoformat()
+            }).execute()
+        elif event_type == "micro_survey_submitted":
+            supabase.table("micro_surveys").insert({
+                "exposure_id": st.session_state.get("current_exposure_id"),
+                "participant_id": st.session_state.participant_id,
+                "poi_id": payload.get("poi_id"),
+                "condition": payload.get("condition"),
+                "mental_demand": payload.get("mental_demand"),
+                "temporal_pressure": payload.get("temporal_pressure"),
+                "effort": payload.get("effort"),
+                "frustration": payload.get("frustration"),
+                "perceived_control": payload.get("perceived_control"),
+                "interruption": payload.get("interruption"),
+                "situated_engagement": payload.get("situated_engagement"),
+                "info_satisfaction": payload.get("info_satisfaction"),
+                "cultural_trust": payload.get("cultural_trust"),
+                "source_usefulness": payload.get("source_usefulness"),
+                "learning_confidence": payload.get("learning_confidence"),
+                "knowledge_correct": payload.get("knowledge_correct"),
+                "knowledge_answer": payload.get("knowledge_answer"),
+                "timestamp": datetime.now().isoformat()
+            }).execute()
+        elif event_type == "final_survey_completed":
+            supabase.table("final_surveys").insert({
+                "participant_id": st.session_state.participant_id,
+                "group": st.session_state.group,
+                "preference": payload.get("preference"),
+                "preference_reason": payload.get("preference_reason"),
+                "trust_breakpoint": payload.get("trust_breakpoint"),
+                "interruption_moment": payload.get("interruption_moment"),
+                "open_comments": payload.get("open_comments"),
+                "sus_responses": payload.get("sus"),
+                "toast_responses": payload.get("toast"),
+                "c1_easy_b": payload.get("c1_easy_b"),
+                "c2_understand_b": payload.get("c2_understand_b"),
+                "c3_interesting_b": payload.get("c3_interesting_b"),
+                "c1_easy_c": payload.get("c1_easy_c"),
+                "c2_understand_c": payload.get("c2_understand_c"),
+                "c3_interesting_c": payload.get("c3_interesting_c"),
+                "c4_recq_understand_c": payload.get("c4_recq_understand_c"),
+                "c5_recq_interesting_c": payload.get("c5_recq_interesting_c"),
+                "timestamp": datetime.now().isoformat()
+            }).execute()
+        else:
+            supabase.table("interaction_logs").insert({
+                "participant_id": st.session_state.participant_id,
+                "event_type": event_type,
+                "payload": payload,
+                "timestamp": datetime.now().isoformat()
+            }).execute()
+    except Exception as e:
+        log_app_error(f"log_event_{event_type}", e, extra=payload)
+
+# ==================== Dify RAG 函数 ====================
+def simulate_rag_engine(user_query, poi):
+    start = time.time()
+    key = st.secrets.get("DIFY_API_KEY_MAIN", "Bearer app-rzITs8smrzMUhhdraDriLuRp")
+    try:
+        resp = requests.post("https://api.dify.ai/v1/chat-messages",
+            headers={"Authorization": key, "Content-Type": "application/json"},
+            json={"inputs": {"current_poi": poi["name"]}, "query": user_query,
+                  "response_mode": "blocking", "user": st.session_state.get("participant_id")},
+            timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        ans = data.get("answer", "抱歉，无法回答。")
+        resources = data.get("metadata", {}).get("retriever_resources", [])
+        src = f"官方数字认证：{resources[0].get('dataset_name', '无锡史志库')}" if resources else "惠山古镇文献库"
+        return ans, src, str(resources), time.time()-start
+    except Exception as e:
+        log_app_error("simulate_rag_engine", e, extra={"query": user_query, "poi": poi["name"]})
+        return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start
+
+def generate_followup_questions(user_question, ai_answer, pid):
+    key = st.secrets.get("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
+    try:
+        resp = requests.post("https://api.dify.ai/v1/chat-messages",
+            headers={"Authorization": key, "Content-Type": "application/json"},
+            json={"inputs": {}, "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
+                  "response_mode": "blocking", "user": pid}, timeout=10)
+        match = re.search(r'\[.*\]', resp.json().get("answer", "[]"))
+        return json.loads(match.group(0)) if match else []
+    except Exception as e:
+        log_app_error("generate_followup_questions", e, extra={"user_question": user_question})
+        return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
+                "这里与无锡本地文化有什么关联？",
+                "有什么值得关注的参观细节？"]
+
+def handle_question(question, poi, cond):
+    with st.spinner("AI 导览员正在查阅史料..."):
+        ans, src, chunks, elap = simulate_rag_engine(question, poi)
+        exposure_id = st.session_state.get("current_exposure_id")
+        if "chat_messages_by_exposure" not in st.session_state:
+            st.session_state.chat_messages_by_exposure = {}
+        if exposure_id not in st.session_state.chat_messages_by_exposure:
+            st.session_state.chat_messages_by_exposure[exposure_id] = []
+        st.session_state.chat_messages_by_exposure[exposure_id].append({"role": "user", "content": question})
+        st.session_state.chat_messages_by_exposure[exposure_id].append({"role": "assistant", "content": ans, "source": src})
+        
+        log_event("question_submitted", {
+            "query_text": question, "response_text": ans,
+            "response_latency_ms": round(elap*1000), "retrieved_chunks": chunks, "source_chip": src
+        })
+        st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
+        if cond == "recchatbox":
+            st.session_state.followup_questions = generate_followup_questions(question, ans, st.session_state.participant_id)
+        else:
+            st.session_state.followup_questions = []
+        st.rerun()
 
 # ==================== 三个渲染函数（完整） ====================
 def render_baseline(poi):
@@ -406,14 +529,17 @@ def render_free_text_rag(poi):
     st.markdown("---")
     st.markdown("#### 💬 向 AI 提问")
     
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-    
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant" and "source" in msg:
-                st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
+    exposure_id = st.session_state.get("current_exposure_id")
+    if exposure_id and exposure_id in st.session_state.get("chat_messages_by_exposure", {}):
+        messages = st.session_state.chat_messages_by_exposure[exposure_id]
+        for msg in messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg["role"] == "assistant" and "source" in msg:
+                    st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
+    else:
+        # 没有历史消息时不显示任何内容
+        pass
     
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt, poi, "free_text")
@@ -455,64 +581,17 @@ def render_recchatbox(poi):
     
     st.markdown("#### 💬 向 AI 提问")
     
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-    
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant" and "source" in msg:
-                st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
+    exposure_id = st.session_state.get("current_exposure_id")
+    if exposure_id and exposure_id in st.session_state.get("chat_messages_by_exposure", {}):
+        messages = st.session_state.chat_messages_by_exposure[exposure_id]
+        for msg in messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg["role"] == "assistant" and "source" in msg:
+                    st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
     
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt, poi, "recchatbox")
-
-# ==================== Dify RAG 函数 ====================
-def simulate_rag_engine(user_query, poi):
-    start = time.time()
-    key = st.secrets.get("DIFY_API_KEY_MAIN", "Bearer app-rzITs8smrzMUhhdraDriLuRp")
-    try:
-        resp = requests.post("https://api.dify.ai/v1/chat-messages",
-            headers={"Authorization": key, "Content-Type": "application/json"},
-            json={"inputs": {"current_poi": poi["name"]}, "query": user_query,
-                  "response_mode": "blocking", "user": st.session_state.get("participant_id")},
-            timeout=15)
-        data = resp.json()
-        ans = data.get("answer", "抱歉，无法回答。")
-        resources = data.get("metadata", {}).get("retriever_resources", [])
-        src = f"官方数字认证：{resources[0].get('dataset_name', '无锡史志库')}" if resources else "惠山古镇文献库"
-        return ans, src, str(resources), time.time()-start
-    except:
-        return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start
-
-def generate_followup_questions(user_question, ai_answer, pid):
-    key = st.secrets.get("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
-    try:
-        resp = requests.post("https://api.dify.ai/v1/chat-messages",
-            headers={"Authorization": key, "Content-Type": "application/json"},
-            json={"inputs": {}, "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
-                  "response_mode": "blocking", "user": pid}, timeout=10)
-        match = re.search(r'\[.*\]', resp.json().get("answer", "[]"))
-        return json.loads(match.group(0)) if match else []
-    except:
-        return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
-                "这里与无锡本地文化有什么关联？",
-                "有什么值得关注的参观细节？"]
-
-def handle_question(question, poi, cond):
-    with st.spinner("AI 导览员正在查阅史料..."):
-        ans, src, chunks, elap = simulate_rag_engine(question, poi)
-        if "chat_messages" not in st.session_state: st.session_state.chat_messages = []
-        st.session_state.chat_messages.append({"role": "user", "content": question})
-        st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
-        log_event("question_submitted", {"query_text": question, "response_text": ans,
-                  "response_latency_ms": round(elap*1000), "retrieved_chunks": chunks, "source_chip": src})
-        st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
-        if cond == "recchatbox":
-            st.session_state.followup_questions = generate_followup_questions(question, ans, st.session_state.participant_id)
-        else:
-            st.session_state.followup_questions = []
-        st.rerun()
 
 # ==================== 页面渲染函数 ====================
 def show_intro():
@@ -628,7 +707,13 @@ def show_poi_page():
     st.session_state.current_condition = condition
     if "poi_page_load_ts" not in st.session_state:
         st.session_state.poi_page_load_ts = time.time()
-    # Hero + 天气
+    
+    log_event("poi_entered", {
+        "poi_id": poi["id"],
+        "condition": condition,
+        "sequence_position": poi_idx + 1
+    })
+    
     st.markdown(f"""
     <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
       <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
@@ -636,25 +721,9 @@ def show_poi_page():
     </div>
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {get_weather_and_comfort()}</div>', unsafe_allow_html=True)
-    # 推荐卡片（无按钮）
-    st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div>', unsafe_allow_html=True)
-    cols = st.columns(5)
-    rec_list = [
-        ("天下第二泉", "erquan", RECOMMEND_IMG_URLS["天下第二泉"]),
-        ("古华山门", "guhuashanmen", RECOMMEND_IMG_URLS["古华山门"]),
-        ("知鱼槛", "bayinjian", RECOMMEND_IMG_URLS["知鱼槛"]),
-        ("竹炉山房", "zhulu_shanfang", RECOMMEND_IMG_URLS["竹炉山房"]),
-        ("范文正公祠", "fanwenzheng_gongci", RECOMMEND_IMG_URLS["范文正公祠"])
-    ]
-    for i, (name, _, url) in enumerate(rec_list):
-        with cols[i]:
-            img_url = get_img_url_or_local(
-                {"天下第二泉":"二泉.jpg","古华山门":"金莲桥.jpg","知鱼槛":"知鱼栏.jpg",
-                 "竹炉山房":"竹炉山房.jpg","范文正公祠":"范文公正祠.jpg"}[name], url)
-            st.image(img_url, use_column_width=True, output_format="JPEG")
-            st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    # 条件渲染
+    
+    # 已删除“今日推荐”图片卡片
+    
     if condition == "baseline":
         render_baseline(poi_data)
         st.caption("✨ 静态展示模式 · 无 AI 对话")
@@ -662,7 +731,7 @@ def show_poi_page():
         render_free_text_rag(poi_data)
     else:
         render_recchatbox(poi_data)
-    # 下一站 → 微问卷
+    
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
         dwell = time.time() - st.session_state.poi_page_load_ts
         log_event("poi_completed", {"poi": poi["id"], "condition": condition, "dwell_seconds": round(dwell,2)})
@@ -688,7 +757,6 @@ def show_micro_survey():
         trust = st.slider("信息在历史文化上是可信的", 1,7,4)
         source_use = st.slider("来源标注让我更愿意相信信息", 1,7,4)
         learn_conf = st.slider("我能向别人说明该点位的核心文化意义", 1,7,4)
-        # 知识题
         q_map = {
             "fanwenzheng_gongci": ("范文正公祠主要祭祀哪位历史人物？",["范仲淹","苏轼","陆羽","阿炳"],"范仲淹"),
             "guhuashanmen": ("金莲桥最适合作为哪类体验节点？",["空间过渡","商业消费","现代交通","纯自然景观"],"空间过渡"),
@@ -715,9 +783,8 @@ def show_micro_survey():
                 st.session_state.stage = "final_survey"
             else:
                 st.session_state.stage = "poi"
-                st.session_state.chat_messages = []
-                st.session_state.followup_questions = []
                 st.session_state.poi_page_load_ts = time.time()
+                st.session_state.followup_questions = []
             st.rerun()
 
 def show_final_survey():
@@ -737,6 +804,17 @@ def show_final_survey():
                 "帮助我完成文化信息探索目标。","表现稳定一致。","反应符合我的预期。",
                 "信息很少让我意外或困惑。","我愿意依赖该界面提供的信息。"]):
                 st.slider(f"TOAST {i+1}: {toast_item}", 1,7,4, key=f"toast_{cond}_{i}")
+        st.markdown("---")
+        st.markdown("#### 关于**自由提问 AI (B)** 的体验")
+        c1_easy_b = st.slider("提出问题是容易的。", 1,5,3, key="c1_easy_b")
+        c2_understand_b = st.slider("我理解系统给出的回答。", 1,5,3, key="c2_understand_b")
+        c3_interesting_b = st.slider("系统回答让我觉得内容更有趣。", 1,5,3, key="c3_interesting_b")
+        st.markdown("#### 关于**推荐式交互 (C)** 的体验")
+        c1_easy_c = st.slider("提出问题是容易的。", 1,5,3, key="c1_easy_c")
+        c2_understand_c = st.slider("我理解系统给出的回答。", 1,5,3, key="c2_understand_c")
+        c3_interesting_c = st.slider("系统回答让我觉得内容更有趣。", 1,5,3, key="c3_interesting_c")
+        c4_recq_understand_c = st.slider("系统推荐的问题是清楚易懂的。", 1,5,3, key="c4_recq_understand_c")
+        c5_recq_interesting_c = st.slider("系统推荐的问题能激发我继续探索。", 1,5,3, key="c5_recq_interesting_c")
         st.markdown("#### 偏好与开放题")
         pref = st.radio("最愿意使用哪一种？", ["原始网页","自由提问 AI","推荐式交互"], key="pref")
         pref_reason = st.text_area("请说明原因")
@@ -744,10 +822,15 @@ def show_final_survey():
         interrupt_moment = st.text_area("有没有哪一刻手机信息干扰了你看真实场景？")
         comments = st.text_area("其他意见或建议")
         if st.form_submit_button("提交评价"):
-            final = {"preference":pref, "preference_reason":pref_reason, "trust_breakpoint":trust_break,
-                     "interruption_moment":interrupt_moment, "open_comments":comments,
-                     "sus":{f"{cond}_{i}":st.session_state.get(f"sus_{cond}_{i}") for cond in conditions for i in range(10)},
-                     "toast":{f"{cond}_{i}":st.session_state.get(f"toast_{cond}_{i}") for cond in conditions for i in range(5)}}
+            final = {
+                "preference": pref, "preference_reason": pref_reason, "trust_breakpoint": trust_break,
+                "interruption_moment": interrupt_moment, "open_comments": comments,
+                "sus": {f"{cond}_{i}": st.session_state.get(f"sus_{cond}_{i}") for cond in conditions for i in range(10)},
+                "toast": {f"{cond}_{i}": st.session_state.get(f"toast_{cond}_{i}") for cond in conditions for i in range(5)},
+                "c1_easy_b": c1_easy_b, "c2_understand_b": c2_understand_b, "c3_interesting_b": c3_interesting_b,
+                "c1_easy_c": c1_easy_c, "c2_understand_c": c2_understand_c, "c3_interesting_c": c3_interesting_c,
+                "c4_recq_understand_c": c4_recq_understand_c, "c5_recq_interesting_c": c5_recq_interesting_c
+            }
             log_event("final_survey_completed", final)
             st.session_state.stage = "done"
             st.rerun()
@@ -765,6 +848,8 @@ def main():
         st.session_state.group = st.query_params.get("group")
     if "stage" not in st.session_state:
         st.session_state.stage = "intro"
+    if "chat_messages_by_exposure" not in st.session_state:
+        st.session_state.chat_messages_by_exposure = {}
     stage = st.session_state.stage
     if stage == "intro": show_intro()
     elif stage == "consent": show_consent()
