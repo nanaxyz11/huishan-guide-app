@@ -14,6 +14,10 @@ from urllib.parse import quote
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="collapsed")
 
+# ==================== 错误消息持久化 ====================
+if "error_message" not in st.session_state:
+    st.session_state.error_message = ""
+
 # ==================== GitHub 图片直链 ====================
 def get_github_raw_url(filename: str) -> str:
     base = "https://raw.githubusercontent.com/nanaxyz11/huishan-guide-app/main/%E6%83%A0%E5%B1%B1%E5%8F%A45POI%E5%9B%BE/"
@@ -424,7 +428,7 @@ def log_event(event_type, payload=None):
     except Exception as e:
         log_app_error(f"log_event_{event_type}", e, extra=payload)
 
-# ==================== Dify RAG 函数（直接使用提供的 API URL 和密钥） ====================
+# ==================== Dify RAG 函数（修复 exposure_id 和错误提示） ====================
 DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
 DIFY_API_KEY_MAIN = "app-rzITs8smrzMUhhdraDriLuRp"        # AI导览员
 DIFY_API_KEY_FOLLOWUP = "app-CCck7NxI8NLZIxf24Q247Hti"   # 对话型应用API（引导3问题）
@@ -451,12 +455,12 @@ def simulate_rag_engine(user_query, poi):
         return ans, src, str(resources), time.time()-start
     except requests.exceptions.Timeout:
         err_msg = "AI 服务响应超时，请稍后重试。"
-        st.warning(err_msg)
+        st.session_state.error_message = err_msg
         log_app_error("simulate_rag_engine_timeout", err_msg, {"query": user_query, "poi": poi["name"]})
         return err_msg, "网络超时", "[Timeout]", time.time()-start
     except Exception as e:
         err_msg = f"AI 服务异常：{str(e)}"
-        st.error(err_msg)
+        st.session_state.error_message = err_msg
         log_app_error("simulate_rag_engine", e, {"query": user_query, "poi": poi["name"]})
         return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start
 
@@ -485,13 +489,22 @@ def generate_followup_questions(user_question, ai_answer, pid):
                 "有什么值得关注的参观细节？"]
 
 def handle_question(question, poi, cond):
+    # 确保 exposure_id 存在
+    if "current_exposure_id" not in st.session_state or st.session_state.current_exposure_id is None:
+        st.session_state.current_exposure_id = str(uuid.uuid4())
+        log_app_error("handle_question_missing_exposure", "generated fallback exposure_id", {})
+    exposure_id = st.session_state.current_exposure_id
+
     with st.spinner("AI 导览员正在查阅史料..."):
         ans, src, chunks, elap = simulate_rag_engine(question, poi)
-        exposure_id = st.session_state.get("current_exposure_id")
+        
+        # 初始化聊天记录容器
         if "chat_messages_by_exposure" not in st.session_state:
             st.session_state.chat_messages_by_exposure = {}
         if exposure_id not in st.session_state.chat_messages_by_exposure:
             st.session_state.chat_messages_by_exposure[exposure_id] = []
+        
+        # 保存消息
         st.session_state.chat_messages_by_exposure[exposure_id].append({"role": "user", "content": question})
         st.session_state.chat_messages_by_exposure[exposure_id].append({"role": "assistant", "content": ans, "source": src})
         
@@ -499,6 +512,7 @@ def handle_question(question, poi, cond):
             "query_text": question, "response_text": ans,
             "response_latency_ms": round(elap*1000), "retrieved_chunks": chunks, "source_chip": src
         })
+        
         # 尝试语音播报
         try:
             safe_ans = ans.replace('"', '\\"').replace('\n', ' ')
@@ -510,9 +524,10 @@ def handle_question(question, poi, cond):
             st.session_state.followup_questions = generate_followup_questions(question, ans, st.session_state.participant_id)
         else:
             st.session_state.followup_questions = []
+        
         st.rerun()
 
-# ==================== 三个渲染函数（完整） ====================
+# ==================== 三个渲染函数 ====================
 def render_baseline(poi):
     """Baseline 界面：固定介绍 + 关键词 chip + 来源 chip"""
     st.markdown(f"""
@@ -630,6 +645,12 @@ def render_recchatbox(poi):
 
 # ==================== 页面渲染函数 ====================
 def show_intro():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     st.markdown(f"""
     <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{MAIN_IMG_URL}');">
       <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
@@ -656,6 +677,12 @@ def show_intro():
         st.rerun()
 
 def show_consent():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     st.title("📄 知情同意书")
     st.markdown("---")
     st.markdown("""
@@ -674,6 +701,12 @@ def show_consent():
         st.rerun()
 
 def show_pretest():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     st.title("📝 基本信息调查")
     with st.form("pretest_form"):
         age = st.text_input("1. 您的年龄", placeholder="例如：25")
@@ -712,6 +745,12 @@ def show_pretest():
             st.rerun()
 
 def show_route_intro():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     st.title("🗺️ 路线说明")
     st.markdown("""
     **您将按以下顺序参观 5 个历史文化点位：**
@@ -729,6 +768,12 @@ def show_route_intro():
         st.rerun()
 
 def show_poi_page():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     poi_idx = st.session_state.poi_index
     if poi_idx >= len(POIS):
         st.session_state.stage = "final_survey"
@@ -775,6 +820,12 @@ def show_poi_page():
         st.rerun()
 
 def show_micro_survey():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     poi_idx = st.session_state.pending_poi_index
     poi = POIS[poi_idx]
     poi_id = poi["id"]
@@ -823,6 +874,12 @@ def show_micro_survey():
             st.rerun()
 
 def show_final_survey():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     st.title("📝 整体体验评价")
     st.markdown("请分别评价您体验过的三种界面。")
     conditions = ["baseline", "free_text", "recchatbox"]
@@ -871,6 +928,12 @@ def show_final_survey():
             st.rerun()
 
 def show_done():
+    if st.session_state.error_message:
+        st.error(st.session_state.error_message)
+        if st.button("清除错误"):
+            st.session_state.error_message = ""
+            st.rerun()
+    
     st.success("🎉 实验完成！感谢您的参与！")
     st.markdown("补偿码：`HS-3A-2024`。您可以关闭此页面了。")
     st.caption("惠山古镇 AI 导览员实验研究 | 江南大学")
