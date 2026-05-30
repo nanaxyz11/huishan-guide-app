@@ -254,17 +254,14 @@ GROUP_CONDITION_MAP = {
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 
-# ==================== 错误日志辅助函数（安全版本，不依赖 session_state 初始化）====================
+# ==================== 错误日志辅助函数 ====================
 def log_app_error(context, error_detail):
-    """写入 app_errors 表，安全访问 session_state（若未初始化则只写本地）"""
-    # 尝试安全获取当前 participant_id, group, exposure_id
     try:
-        pid = st.session_state.get("participant_id", "UNKNOWN") if hasattr(st, "session_state") else "UNKNOWN"
-        grp = st.session_state.get("group", "UNKNOWN") if hasattr(st, "session_state") else "UNKNOWN"
-        exp_id = st.session_state.get("current_exposure_id", "UNKNOWN") if hasattr(st, "session_state") else "UNKNOWN"
+        pid = st.session_state.get("participant_id", "UNKNOWN") if "participant_id" in st.session_state else "UNKNOWN"
+        grp = st.session_state.get("group", "UNKNOWN") if "group" in st.session_state else "UNKNOWN"
+        exp_id = st.session_state.get("current_exposure_id", "UNKNOWN") if "current_exposure_id" in st.session_state else "UNKNOWN"
     except:
         pid = grp = exp_id = "UNKNOWN"
-    
     error_data = {
         "participant_id": pid,
         "group": grp,
@@ -273,18 +270,16 @@ def log_app_error(context, error_detail):
         "error_detail": str(error_detail),
         "timestamp": datetime.now().isoformat()
     }
-    # 先保存本地
     os.makedirs("logs", exist_ok=True)
     with open("logs/app_errors.csv", "a", encoding="utf-8") as f:
         f.write(f"{error_data}\n")
-    # 尝试写 Supabase（如果可用）
-    try:
-        if "supabase" in st.session_state and st.session_state.supabase:
+    if "supabase" in st.session_state and st.session_state.get("supabase"):
+        try:
             st.session_state.supabase.table("app_errors").insert(error_data).execute()
-    except:
-        pass
+        except:
+            pass
 
-# ==================== Supabase 客户端（延迟初始化，在 main 中完成）====================
+# ==================== Supabase 客户端 ====================
 def init_supabase():
     if "supabase" not in st.session_state:
         try:
@@ -294,7 +289,6 @@ def init_supabase():
             )
         except Exception as e:
             st.session_state.supabase = None
-            # 不在这里调用 log_app_error，因为此时 session_state 可能还没准备好，但可以写本地
             error_data = {
                 "participant_id": "UNKNOWN",
                 "group": "UNKNOWN",
@@ -324,7 +318,7 @@ def assign_group_balanced():
             log_app_error("assign_group_balanced", str(e))
     return random.choice(VALID_GROUPS)
 
-# ==================== 统一的日志写入函数（分8张表） ====================
+# ==================== 数据库写入函数 ====================
 def write_participant(pid, group, pretest_data):
     if not st.session_state.get("supabase"):
         return
@@ -337,21 +331,6 @@ def write_participant(pid, group, pretest_data):
         }).execute()
     except Exception as e:
         log_app_error("write_participant", str(e))
-
-def write_route_session(pid, group, route_start_ts):
-    if not st.session_state.get("supabase"):
-        return None
-    try:
-        resp = st.session_state.supabase.table("route_sessions").insert({
-            "participant_id": pid,
-            "group": group,
-            "route_start_ts": route_start_ts,
-            "created_at": datetime.now().isoformat()
-        }).execute()
-        return resp.data[0]["id"] if resp.data else None
-    except Exception as e:
-        log_app_error("write_route_session", str(e))
-        return None
 
 def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts):
     if not st.session_state.get("supabase"):
@@ -416,7 +395,7 @@ def write_final_survey(pid, group, final_data):
     except Exception as e:
         log_app_error("write_final_survey", str(e))
 
-def write_poi_completed(pid, group, exposure_id, poi_id, condition, dwell_seconds):
+def write_poi_completed(exposure_id, dwell_seconds):
     if not st.session_state.get("supabase"):
         return
     try:
@@ -427,7 +406,7 @@ def write_poi_completed(pid, group, exposure_id, poi_id, condition, dwell_second
     except Exception as e:
         log_app_error("write_poi_completed", str(e))
 
-# ==================== 三个渲染函数（完整，推荐问题竖向排列） ====================
+# ==================== 三个渲染函数（完整） ====================
 def render_baseline(poi):
     st.markdown(f"""
     <div class="jn-card">
@@ -688,21 +667,29 @@ def show_poi_page():
     st.session_state.current_poi_id = poi["id"]
     st.session_state.current_poi_name = poi["name"]
     st.session_state.current_condition = condition
-    exposure_id = str(uuid.uuid4())
-    st.session_state.current_exposure_id = exposure_id
-    st.session_state.chat_messages = []
-    st.session_state.current_followups = []
-    if "poi_page_load_ts" not in st.session_state:
-        st.session_state.poi_page_load_ts = time.time()
-    write_poi_exposure(
-        pid=st.session_state.participant_id,
-        group=st.session_state.group,
-        exposure_id=exposure_id,
-        poi_id=poi["id"],
-        condition=condition,
-        sequence_position=poi_idx+1,
-        page_load_ts=st.session_state.poi_page_load_ts
-    )
+
+    # 只在首次进入该 POI 时生成新的 exposure_id 和重置聊天记录
+    if st.session_state.get("last_poi_index") != poi_idx:
+        exposure_id = str(uuid.uuid4())
+        st.session_state.current_exposure_id = exposure_id
+        st.session_state.chat_messages = []
+        st.session_state.current_followups = []
+        st.session_state.last_poi_index = poi_idx
+        if "poi_page_load_ts" not in st.session_state:
+            st.session_state.poi_page_load_ts = time.time()
+        write_poi_exposure(
+            pid=st.session_state.participant_id,
+            group=st.session_state.group,
+            exposure_id=exposure_id,
+            poi_id=poi["id"],
+            condition=condition,
+            sequence_position=poi_idx+1,
+            page_load_ts=st.session_state.poi_page_load_ts
+        )
+    else:
+        exposure_id = st.session_state.current_exposure_id  # 复用已有 ID
+
+    # Hero + 天气
     st.markdown(f"""
     <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
       <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
@@ -710,6 +697,8 @@ def show_poi_page():
     </div>
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {get_weather_and_comfort()}</div>', unsafe_allow_html=True)
+
+    # 条件渲染
     if condition == "baseline":
         render_baseline(poi_data)
         st.caption("✨ 静态展示模式 · 无 AI 对话")
@@ -717,16 +706,11 @@ def show_poi_page():
         render_free_text_rag(poi_data)
     else:
         render_recchatbox(poi_data)
+
+    # 下一站 → 微问卷
     if st.button("✅ 我已游览完当前点位，前往下一站", use_container_width=True):
         dwell = time.time() - st.session_state.poi_page_load_ts
-        write_poi_completed(
-            pid=st.session_state.participant_id,
-            group=st.session_state.group,
-            exposure_id=exposure_id,
-            poi_id=poi["id"],
-            condition=condition,
-            dwell_seconds=round(dwell,2)
-        )
+        write_poi_completed(exposure_id, round(dwell, 2))
         st.session_state.pending_poi_index = poi_idx
         st.session_state.stage = "micro_survey"
         st.rerun()
@@ -783,13 +767,14 @@ def show_micro_survey():
                 condition=st.session_state.current_condition,
                 micro_data=micro_data
             )
+            # 清除当前 POI 的聊天记录，准备下一个 POI
+            st.session_state.chat_messages = []
+            st.session_state.current_followups = []
             st.session_state.poi_index = poi_idx + 1
             if st.session_state.poi_index >= len(POIS):
                 st.session_state.stage = "final_survey"
             else:
                 st.session_state.stage = "poi"
-                st.session_state.chat_messages = []
-                st.session_state.current_followups = []
                 st.session_state.poi_page_load_ts = time.time()
             st.rerun()
 
@@ -853,9 +838,7 @@ def show_done():
 
 # ==================== 主入口 ====================
 def main():
-    # 延迟初始化 Supabase
     init_supabase()
-    
     if "participant_id" not in st.session_state:
         st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
     if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
