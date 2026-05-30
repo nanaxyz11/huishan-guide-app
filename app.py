@@ -424,25 +424,17 @@ def log_event(event_type, payload=None):
     except Exception as e:
         log_app_error(f"log_event_{event_type}", e, extra=payload)
 
-# ==================== Dify RAG 函数（修复密钥与错误提示） ====================
-def get_dify_token(api_name):
-    """从 secrets 读取纯 token，不包含 'Bearer '"""
-    raw = st.secrets.get(api_name, "")
-    # 如果用户配置时误加了 "Bearer " 前缀，自动去除
-    if raw.startswith("Bearer "):
-        raw = raw[7:]
-    return raw
+# ==================== Dify RAG 函数（直接使用提供的 API URL 和密钥） ====================
+DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
+DIFY_API_KEY_MAIN = "app-rzITs8smrzMUhhdraDriLuRp"        # AI导览员
+DIFY_API_KEY_FOLLOWUP = "app-CCck7NxI8NLZIxf24Q247Hti"   # 对话型应用API（引导3问题）
 
 def simulate_rag_engine(user_query, poi):
     start = time.time()
-    token = get_dify_token("DIFY_API_KEY_MAIN")
-    if not token:
-        st.error("⚠️ 系统错误：未配置 Dify API 密钥，请联系管理员。")
-        return "【配置错误】AI 服务未就绪。", "配置错误", "[Error]", time.time()-start
     try:
         resp = requests.post(
-            "https://api.dify.ai/v1/chat-messages",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            DIFY_API_URL,
+            headers={"Authorization": f"Bearer {DIFY_API_KEY_MAIN}", "Content-Type": "application/json"},
             json={
                 "inputs": {"current_poi": poi["name"]},
                 "query": user_query,
@@ -469,15 +461,10 @@ def simulate_rag_engine(user_query, poi):
         return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start
 
 def generate_followup_questions(user_question, ai_answer, pid):
-    token = get_dify_token("DIFY_API_KEY_FOLLOWUP")
-    if not token:
-        return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
-                "这里与无锡本地文化有什么关联？",
-                "有什么值得关注的参观细节？"]
     try:
         resp = requests.post(
-            "https://api.dify.ai/v1/chat-messages",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            DIFY_API_URL,
+            headers={"Authorization": f"Bearer {DIFY_API_KEY_FOLLOWUP}", "Content-Type": "application/json"},
             json={
                 "inputs": {},
                 "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
