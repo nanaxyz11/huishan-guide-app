@@ -355,6 +355,20 @@ def try_supabase_update(table_name, update_payload_variants, eq_col, eq_value, c
 
 def write_legacy_event(event_type, payload=None):
     payload = payload or {}
+    query_text = payload.get("query_text") or payload.get("user_query_text") or ""
+    legacy_payload = {
+        "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
+        "experimental_condition": st.session_state.get("current_condition", "UNKNOWN"),
+        "poi_id": st.session_state.get("current_poi_id", "UNKNOWN"),
+        "action_type": event_type,
+        "time_on_page_seconds": payload.get("dwell_seconds") or payload.get("time_on_page_seconds"),
+        "user_query_text": query_text,
+        "user_query_word_count": len(str(query_text).split()) if query_text else 0,
+        "rag_response_time_ms": payload.get("response_latency_ms") or payload.get("rag_response_time_ms"),
+        "retrieved_chunks_saved": str(payload.get("retrieved_chunks") or payload.get("retrieved_chunks_saved") or ""),
+        "displayed_source_cue": payload.get("source_chip") or payload.get("displayed_source_cue"),
+        "timestamp": datetime.now().isoformat()
+    }
     base = {
         "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
         "group": st.session_state.get("group", "UNKNOWN"),
@@ -366,6 +380,7 @@ def write_legacy_event(event_type, payload=None):
         **payload
     }
     return try_supabase_insert("interaction_logs", [
+        legacy_payload,
         base,
         {k: v for k, v in base.items() if k != "group_name"},
         {k: v for k, v in base.items() if k != "group"},
@@ -486,8 +501,7 @@ def write_participant(pid, group, pretest_data):
         {"participant_id": pid, "group_name": group},
         {"participant_id": pid, "group": group},
     ], "write_participant", pid, group)
-    if ok:
-        write_legacy_event("pretest_completed", {"pretest_data": pretest_data})
+    write_legacy_event("pretest_completed", {"pretest_data": pretest_data})
 
 def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts):
     if not st.session_state.get("supabase"):
@@ -510,12 +524,11 @@ def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_posi
         {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition, "group_name": group, "created_at": datetime.now().isoformat()},
         {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition},
     ], "write_poi_exposure", pid, group, exposure_id)
-    if ok:
-        write_legacy_event("poi_exposure_started", {
-            "exposure_id": exposure_id,
-            "sequence_position": sequence_position,
-            "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat()
-        })
+    write_legacy_event("poi_exposure_started", {
+        "exposure_id": exposure_id,
+        "sequence_position": sequence_position,
+        "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat()
+    })
 
 def write_interaction_turn(exposure_id, query_text, query_type, response_text, response_latency_ms, retrieved_chunks, source_chip):
     if not st.session_state.get("supabase"):
@@ -548,8 +561,7 @@ def write_interaction_turn(exposure_id, query_text, query_type, response_text, r
             pid=st.session_state.get("participant_id", "UNKNOWN"),
             grp=st.session_state.get("group", "UNKNOWN"),
             exp_id=exposure_id)
-        if not ok:
-            write_legacy_event("question_submitted", base_payload)
+        write_legacy_event("question_submitted", base_payload)
     except Exception as e:
         log_app_error("write_interaction_turn", str(e),
                       pid=st.session_state.get("participant_id", "UNKNOWN"),
@@ -577,8 +589,7 @@ def write_micro_survey(pid, group, exposure_id, poi_id, condition, micro_data):
             {**payload, "group": group, "timestamp": datetime.now().isoformat()},
             {**payload, "group_name": group, "timestamp": datetime.now().isoformat()},
         ], "write_micro_survey_legacy", pid, group, exposure_id)
-    if ok:
-        write_legacy_event("micro_survey_submitted", payload)
+    write_legacy_event("micro_survey_submitted", payload)
 
 def write_final_survey(pid, group, final_data):
     if not st.session_state.get("supabase"):
@@ -606,8 +617,7 @@ def write_final_survey(pid, group, final_data):
             {"participant_id": pid, "group": group, "final_data": final_data, "timestamp": datetime.now().isoformat()},
             {"participant_id": pid, "group_name": group, "final_data": final_data, "timestamp": datetime.now().isoformat()},
         ], "write_final_survey_legacy", pid, group)
-    if ok:
-        write_legacy_event("final_survey_completed", {"final_data": final_data})
+    write_legacy_event("final_survey_completed", {"final_data": final_data})
 
 def write_poi_completed(exposure_id, dwell_seconds):
     if not st.session_state.get("supabase"):
@@ -616,11 +626,10 @@ def write_poi_completed(exposure_id, dwell_seconds):
         {"next_click_ts": datetime.now().isoformat(), "dwell_seconds": dwell_seconds},
         {"dwell_seconds": dwell_seconds},
     ], "exposure_id", exposure_id, "write_poi_completed", exp_id=exposure_id)
-    if ok:
-        write_legacy_event("poi_exposure_completed", {
-            "exposure_id": exposure_id,
-            "dwell_seconds": dwell_seconds
-        })
+    write_legacy_event("poi_exposure_completed", {
+        "exposure_id": exposure_id,
+        "dwell_seconds": dwell_seconds
+    })
 
 # ==================== 三个渲染函数（完整，推荐问题循环衍生） ====================
 def render_baseline(poi):
@@ -918,15 +927,16 @@ def show_consent():
 
 def show_pretest():
     st.title("📝 基本信息调查")
+    st.info("请注意量表方向：除特别说明外，1=非常不同意，7=非常同意。探索倾向题为 5 点量表：1=非常不同意，5=非常同意。")
     with st.form("pretest_form"):
         age = st.text_input("1. 您的年龄", placeholder="例如：25")
         gender = st.selectbox("2. 您的性别", ["请选择", "男", "女", "不愿透露"])
         education = st.selectbox("3. 您的最高学历", ["请选择", "高中/中专", "大专", "本科", "硕士", "博士及以上"])
         discipline = st.selectbox("4. 您的专业背景", ["请选择", "设计/艺术", "人文/历史", "计算机/信息技术", "旅游/管理", "其他"])
-        heritage_visit_freq = st.slider("5. 过去一年参观博物馆/历史街区的频率", 1, 7, 4, help="1=从不，7=非常频繁")
-        huishan_familiarity = st.slider("6. 我熟悉惠山古镇或曾经到访", 1, 7, 4)
-        genai_familiarity = st.slider("7. 我熟悉生成式 AI 的使用", 1, 7, 4)
-        mobile_guide_exp = st.slider("8. 我有使用手机导览的经验", 1, 7, 4)
+        heritage_visit_freq = st.slider("5. 过去一年参观博物馆/历史街区的频率（1=从不，7=非常频繁）", 1, 7, 4, help="1=从不，7=非常频繁")
+        huishan_familiarity = st.slider("6. 我熟悉惠山古镇或曾经到访（1=非常不同意，7=非常同意）", 1, 7, 4)
+        genai_familiarity = st.slider("7. 我熟悉生成式 AI 的使用（1=非常不同意，7=非常同意）", 1, 7, 4)
+        mobile_guide_exp = st.slider("8. 我有使用手机导览的经验（1=非常不同意，7=非常同意）", 1, 7, 4)
         st.markdown("#### 探索倾向（1=非常不同意，5=非常同意）")
         cei = [st.slider(f"{i+1}. {txt}", 1, 5, 3) for i, txt in enumerate([
             "我通常会主动寻找新的知识、地点或体验。",
@@ -1035,18 +1045,19 @@ def show_micro_survey():
     poi_id = poi["id"]
     st.title(f"📋 点位 {poi_idx+1} 体验问卷")
     st.markdown(f"**{poi['name']}**")
+    st.info("本页所有体验量表均为 7 点量表：1=非常不同意，7=非常同意。")
     with st.form("micro_form"):
-        mental = st.slider("理解信息需要较多脑力", 1, 7, 4)
-        time_p = st.slider("感到时间紧迫", 1, 7, 4)
-        effort = st.slider("需要付出较多努力", 1, 7, 4)
-        frust = st.slider("感到烦躁或受挫", 1, 7, 4)
-        control = st.slider("能自主决定看什么、问什么", 1, 7, 4)
-        interrupt = st.slider("界面打断了我观察真实环境", 1, 7, 4)
-        engage = st.slider("信息帮助我把手机内容和眼前点位联系起来", 1, 7, 4)
-        satisfy = st.slider("信息满足了我的好奇", 1, 7, 4)
-        trust = st.slider("信息在历史文化上是可信的", 1, 7, 4)
-        source_use = st.slider("来源标注让我更愿意相信信息", 1, 7, 4)
-        learn_conf = st.slider("我能向别人说明该点位的核心文化意义", 1, 7, 4)
+        mental = st.slider("理解信息需要较多脑力（1=非常不同意，7=非常同意）", 1, 7, 4)
+        time_p = st.slider("感到时间紧迫（1=非常不同意，7=非常同意）", 1, 7, 4)
+        effort = st.slider("需要付出较多努力（1=非常不同意，7=非常同意）", 1, 7, 4)
+        frust = st.slider("感到烦躁或受挫（1=非常不同意，7=非常同意）", 1, 7, 4)
+        control = st.slider("能自主决定看什么、问什么（1=非常不同意，7=非常同意）", 1, 7, 4)
+        interrupt = st.slider("界面打断了我观察真实环境（1=非常不同意，7=非常同意）", 1, 7, 4)
+        engage = st.slider("信息帮助我把手机内容和眼前点位联系起来（1=非常不同意，7=非常同意）", 1, 7, 4)
+        satisfy = st.slider("信息满足了我的好奇（1=非常不同意，7=非常同意）", 1, 7, 4)
+        trust = st.slider("信息在历史文化上是可信的（1=非常不同意，7=非常同意）", 1, 7, 4)
+        source_use = st.slider("来源标注让我更愿意相信信息（1=非常不同意，7=非常同意）", 1, 7, 4)
+        learn_conf = st.slider("我能向别人说明该点位的核心文化意义（1=非常不同意，7=非常同意）", 1, 7, 4)
         q_map = {
             "fanwenzheng_gongci": ("范文正公祠主要祭祀哪位历史人物？", ["范仲淹", "苏轼", "陆羽", "阿炳"], "范仲淹"),
             "guhuashanmen": ("金莲桥最适合作为哪类体验节点？", ["空间过渡", "商业消费", "现代交通", "纯自然景观"], "空间过渡"),
@@ -1095,6 +1106,7 @@ def show_micro_survey():
 def show_final_survey():
     st.title("📝 整体体验评价")
     st.markdown("请分别评价您体验过的三种界面。")
+    st.info("请注意：SUS 与交互体验题为 5 点量表（1=非常不同意，5=非常同意）；TOAST 信任题为 7 点量表（1=非常不同意，7=非常同意）。")
     conditions = ["baseline", "free_text", "recchatbox"]
     names = {"baseline": "A: 原始网页", "free_text": "B: 自由提问 AI", "recchatbox": "C: 推荐式交互"}
     with st.form("final_form"):
@@ -1105,22 +1117,22 @@ def show_final_survey():
                 "我愿意继续使用该界面。", "该界面显得不必要地复杂。", "该界面容易上手。",
                 "我需要他人帮助才能顺利使用。", "功能整合得很好。", "在不同点位表现不一致。",
                 "多数游客能很快学会。", "使用起来很累赘。", "使用时有信心。", "使用前需要学习很多东西。"]):
-                st.slider(f"SUS {i+1}: {sus_item}", 1, 5, 3, key=f"sus_{cond}_{i}")
+                st.slider(f"SUS {i+1}: {sus_item}（1=非常不同意，5=非常同意）", 1, 5, 3, key=f"sus_{cond}_{i}")
             for i, toast_item in enumerate([
                 "帮助我完成文化信息探索目标。", "表现稳定一致。", "反应符合我的预期。",
                 "信息很少让我意外或困惑。", "我愿意依赖该界面提供的信息。"]):
-                st.slider(f"TOAST {i+1}: {toast_item}", 1, 7, 4, key=f"toast_{cond}_{i}")
+                st.slider(f"TOAST {i+1}: {toast_item}（1=非常不同意，7=非常同意）", 1, 7, 4, key=f"toast_{cond}_{i}")
             if cond != "baseline":
                 st.markdown("**交互体验评价**")
-                c1 = st.slider("提出问题是容易的。", 1, 5, 3, key=f"q_easy_{cond}")
-                c2 = st.slider("我理解系统给出的回答。", 1, 5, 3, key=f"ans_understand_{cond}")
-                c3 = st.slider("系统回答让我觉得内容更有趣。", 1, 5, 3, key=f"ans_interest_{cond}")
+                c1 = st.slider("提出问题是容易的。（1=非常不同意，5=非常同意）", 1, 5, 3, key=f"q_easy_{cond}")
+                c2 = st.slider("我理解系统给出的回答。（1=非常不同意，5=非常同意）", 1, 5, 3, key=f"ans_understand_{cond}")
+                c3 = st.slider("系统回答让我觉得内容更有趣。（1=非常不同意，5=非常同意）", 1, 5, 3, key=f"ans_interest_{cond}")
                 c_answers[f"{cond}_c1"] = c1
                 c_answers[f"{cond}_c2"] = c2
                 c_answers[f"{cond}_c3"] = c3
                 if cond == "recchatbox":
-                    c4 = st.slider("系统推荐的问题是清楚易懂的。", 1, 5, 3, key=f"recq_understand")
-                    c5 = st.slider("系统推荐的问题能激发我继续探索。", 1, 5, 3, key=f"recq_interest")
+                    c4 = st.slider("系统推荐的问题是清楚易懂的。（1=非常不同意，5=非常同意）", 1, 5, 3, key=f"recq_understand")
+                    c5 = st.slider("系统推荐的问题能激发我继续探索。（1=非常不同意，5=非常同意）", 1, 5, 3, key=f"recq_interest")
                     c_answers["recchatbox_c4"] = c4
                     c_answers["recchatbox_c5"] = c5
             st.markdown("---")
