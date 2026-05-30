@@ -292,6 +292,7 @@ GROUP_CONDITION_MAP = {
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 CONDITION_CODE_MAP = {"baseline": "A", "free_text": "B", "recchatbox": "C"}
+VALID_CONDITIONS = set(CONDITION_CODE_MAP.keys())
 
 
 def group_sequence_code(group):
@@ -303,6 +304,74 @@ def safe_int(value):
         return int(value)
     except Exception:
         return None
+
+
+def remember_supabase_error(context, error_detail, payload=None):
+    st.session_state.setdefault("supabase_write_errors", []).append({
+        "context": context,
+        "error_detail": str(error_detail),
+        "payload": payload or {},
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+def try_supabase_insert(table_name, payload_variants, context, pid="UNKNOWN", grp="UNKNOWN", exp_id="UNKNOWN"):
+    supabase = st.session_state.get("supabase")
+    if not supabase:
+        remember_supabase_error(context, "supabase client is None")
+        return False
+
+    last_error = None
+    for payload in payload_variants:
+        try:
+            supabase.table(table_name).insert(payload).execute()
+            return True
+        except Exception as e:
+            last_error = e
+
+    remember_supabase_error(context, last_error, payload_variants[-1] if payload_variants else {})
+    log_app_error(context, str(last_error), pid, grp, exp_id)
+    return False
+
+
+def try_supabase_update(table_name, update_payload_variants, eq_col, eq_value, context, exp_id="UNKNOWN"):
+    supabase = st.session_state.get("supabase")
+    if not supabase:
+        remember_supabase_error(context, "supabase client is None")
+        return False
+
+    last_error = None
+    for payload in update_payload_variants:
+        try:
+            supabase.table(table_name).update(payload).eq(eq_col, eq_value).execute()
+            return True
+        except Exception as e:
+            last_error = e
+
+    remember_supabase_error(context, last_error, update_payload_variants[-1] if update_payload_variants else {})
+    log_app_error(context, str(last_error), exp_id=exp_id)
+    return False
+
+
+def write_legacy_event(event_type, payload=None):
+    payload = payload or {}
+    base = {
+        "participant_id": st.session_state.get("participant_id", "UNKNOWN"),
+        "group": st.session_state.get("group", "UNKNOWN"),
+        "group_name": st.session_state.get("group", "UNKNOWN"),
+        "poi_id": st.session_state.get("current_poi_id", "UNKNOWN"),
+        "condition": st.session_state.get("current_condition", "UNKNOWN"),
+        "event_type": event_type,
+        "timestamp": datetime.now().isoformat(),
+        **payload
+    }
+    return try_supabase_insert("interaction_logs", [
+        base,
+        {k: v for k, v in base.items() if k != "group_name"},
+        {k: v for k, v in base.items() if k != "group"},
+    ], f"legacy_{event_type}",
+        pid=base["participant_id"], grp=st.session_state.get("group", "UNKNOWN"),
+        exp_id=payload.get("exposure_id", "UNKNOWN"))
 
 # ==================== 错误日志辅助函数 ====================
 def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="UNKNOWN"):
@@ -318,8 +387,8 @@ def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="U
     with open("logs/app_errors.csv", "a", encoding="utf-8") as f:
         f.write(f"{error_data}\n")
     if "supabase" in st.session_state and st.session_state.get("supabase"):
-        try:
-            st.session_state.supabase.table("app_errors").insert({
+        for payload in [
+            {
                 "participant_id": pid,
                 "stage": st.session_state.get("stage", "unknown"),
                 "poi_id": st.session_state.get("current_poi_id"),
@@ -332,9 +401,14 @@ def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="U
                     "local_error_data": error_data
                 },
                 "created_at": datetime.now().isoformat()
-            }).execute()
-        except:
-            pass
+            },
+            error_data
+        ]:
+            try:
+                st.session_state.supabase.table("app_errors").insert(payload).execute()
+                break
+            except:
+                pass
 
 # ==================== Supabase 客户端 ====================
 if "supabase" not in st.session_state:
@@ -362,16 +436,20 @@ if "supabase" not in st.session_state:
 def assign_group_balanced():
     supabase = st.session_state.get("supabase")
     if supabase:
-        try:
-            res = supabase.table("participants").select("group_code").execute()
-            if res.data:
-                cnt = {g:0 for g in VALID_GROUPS}
-                for row in res.data:
-                    if row.get("group_code") in cnt:
-                        cnt[row["group_code"]] += 1
-                return min(cnt, key=cnt.get)
-        except Exception as e:
-            log_app_error("assign_group_balanced", str(e),
+        last_error = None
+        for group_col in ["group_name", "group_code", "group"]:
+            try:
+                res = supabase.table("participants").select(group_col).execute()
+                if res.data:
+                    cnt = {g: 0 for g in VALID_GROUPS}
+                    for row in res.data:
+                        if row.get(group_col) in cnt:
+                            cnt[row[group_col]] += 1
+                    return min(cnt, key=cnt.get)
+            except Exception as e:
+                last_error = e
+        if last_error:
+            log_app_error("assign_group_balanced", str(last_error),
                           pid=st.session_state.get("participant_id", "UNKNOWN"),
                           grp=st.session_state.get("group", "UNKNOWN"))
     return random.choice(VALID_GROUPS)
@@ -380,50 +458,64 @@ def assign_group_balanced():
 def write_participant(pid, group, pretest_data):
     if not st.session_state.get("supabase"):
         return
-    try:
-        cei_values = [safe_int(pretest_data.get(f"cei_{i}")) for i in range(1, 9)]
-        cei_values = [v for v in cei_values if v is not None]
-        st.session_state.supabase.table("participants").insert({
-            "participant_id": pid,
-            "group_code": group,
-            "assigned_sequence": group_sequence_code(group),
-            "consent_given": True,
-            "consent_ts": datetime.fromtimestamp(st.session_state.get("consent_ts", time.time())).isoformat(),
-            "age": safe_int(pretest_data.get("age")),
-            "gender": pretest_data.get("gender"),
-            "education": pretest_data.get("education"),
-            "discipline": pretest_data.get("discipline"),
-            "heritage_visit_freq": safe_int(pretest_data.get("heritage_visit_freq")),
-            "huishan_familiarity": safe_int(pretest_data.get("huishan_familiarity")),
-            "genai_familiarity": safe_int(pretest_data.get("genai_familiarity")),
-            "mobile_guide_exp": safe_int(pretest_data.get("mobile_guide_exp")),
-            **{f"cei_{i}": safe_int(pretest_data.get(f"cei_{i}")) for i in range(1, 9)},
-            "cei_mean": round(sum(cei_values) / len(cei_values), 3) if cei_values else None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }).execute()
-    except Exception as e:
-        log_app_error("write_participant", str(e), pid, group)
+    cei_values = [safe_int(pretest_data.get(f"cei_{i}")) for i in range(1, 9)]
+    cei_values = [v for v in cei_values if v is not None]
+    detailed_payload = {
+        "participant_id": pid,
+        "assigned_sequence": group_sequence_code(group),
+        "consent_given": True,
+        "consent_ts": datetime.fromtimestamp(st.session_state.get("consent_ts", time.time())).isoformat(),
+        "age": safe_int(pretest_data.get("age")),
+        "gender": pretest_data.get("gender"),
+        "education": pretest_data.get("education"),
+        "discipline": pretest_data.get("discipline"),
+        "heritage_visit_freq": safe_int(pretest_data.get("heritage_visit_freq")),
+        "huishan_familiarity": safe_int(pretest_data.get("huishan_familiarity")),
+        "genai_familiarity": safe_int(pretest_data.get("genai_familiarity")),
+        "mobile_guide_exp": safe_int(pretest_data.get("mobile_guide_exp")),
+        **{f"cei_{i}": safe_int(pretest_data.get(f"cei_{i}")) for i in range(1, 9)},
+        "cei_mean": round(sum(cei_values) / len(cei_values), 3) if cei_values else None,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    ok = try_supabase_insert("participants", [
+        {**detailed_payload, "group_name": group},
+        {**detailed_payload, "group_code": group},
+        {"participant_id": pid, "group_name": group, "pretest_data": pretest_data, "created_at": datetime.now().isoformat()},
+        {"participant_id": pid, "group": group, "pretest_data": pretest_data, "created_at": datetime.now().isoformat()},
+        {"participant_id": pid, "group_name": group},
+        {"participant_id": pid, "group": group},
+    ], "write_participant", pid, group)
+    if ok:
+        write_legacy_event("pretest_completed", {"pretest_data": pretest_data})
 
 def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts):
     if not st.session_state.get("supabase"):
         return
-    try:
-        st.session_state.supabase.table("poi_exposures").insert({
-            "participant_id": pid,
-            "group_code": group,
+    base_payload = {
+        "participant_id": pid,
+        "exposure_id": exposure_id,
+        "poi_id": poi_id,
+        "poi_name": st.session_state.get("current_poi_name"),
+        "condition": condition,
+        "condition_order_base": group_sequence_code(group),
+        "sequence_position": sequence_position,
+        "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat(),
+        "ui_version": "streamlit-3condition-0530",
+        "created_at": datetime.now().isoformat()
+    }
+    ok = try_supabase_insert("poi_exposures", [
+        {**base_payload, "group_name": group},
+        {**base_payload, "group_code": group},
+        {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition, "group_name": group, "created_at": datetime.now().isoformat()},
+        {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition},
+    ], "write_poi_exposure", pid, group, exposure_id)
+    if ok:
+        write_legacy_event("poi_exposure_started", {
             "exposure_id": exposure_id,
-            "poi_id": poi_id,
-            "poi_name": st.session_state.get("current_poi_name"),
-            "condition": condition,
-            "condition_order_base": group_sequence_code(group),
             "sequence_position": sequence_position,
-            "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat(),
-            "ui_version": "streamlit-3condition-0530",
-            "created_at": datetime.now().isoformat()
-        }).execute()
-    except Exception as e:
-        log_app_error("write_poi_exposure", str(e), pid, group, exposure_id)
+            "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat()
+        })
 
 def write_interaction_turn(exposure_id, query_text, query_type, response_text, response_latency_ms, retrieved_chunks, source_chip):
     if not st.session_state.get("supabase"):
@@ -435,7 +527,7 @@ def write_interaction_turn(exposure_id, query_text, query_type, response_text, r
                 retrieved_payload = json.loads(retrieved_chunks)
             except Exception:
                 retrieved_payload = {"raw": retrieved_chunks}
-        st.session_state.supabase.table("interaction_turns").insert({
+        base_payload = {
             "participant_id": st.session_state.get("participant_id"),
             "exposure_id": exposure_id,
             "poi_id": st.session_state.get("current_poi_id"),
@@ -447,7 +539,17 @@ def write_interaction_turn(exposure_id, query_text, query_type, response_text, r
             "retrieved_chunks": retrieved_payload,
             "source_chip": source_chip,
             "created_at": datetime.now().isoformat()
-        }).execute()
+        }
+        ok = try_supabase_insert("interaction_turns", [
+            base_payload,
+            {k: v for k, v in base_payload.items() if k not in ["retrieved_chunks", "source_chip"]},
+            {**{k: v for k, v in base_payload.items() if k not in ["retrieved_chunks", "source_chip", "created_at"]}, "timestamp": datetime.now().isoformat()},
+        ], "write_interaction_turn",
+            pid=st.session_state.get("participant_id", "UNKNOWN"),
+            grp=st.session_state.get("group", "UNKNOWN"),
+            exp_id=exposure_id)
+        if not ok:
+            write_legacy_event("question_submitted", base_payload)
     except Exception as e:
         log_app_error("write_interaction_turn", str(e),
                       pid=st.session_state.get("participant_id", "UNKNOWN"),
@@ -456,48 +558,69 @@ def write_interaction_turn(exposure_id, query_text, query_type, response_text, r
 def write_micro_survey(pid, group, exposure_id, poi_id, condition, micro_data):
     if not st.session_state.get("supabase"):
         return
-    try:
-        st.session_state.supabase.table("micro_surveys").insert({
-            "participant_id": pid,
-            "exposure_id": exposure_id,
-            "sequence_position": st.session_state.get("poi_index", 0) + 1,
-            "poi_id": poi_id,
-            "condition": condition,
-            **micro_data,
-            "submitted_at": datetime.now().isoformat()
-        }).execute()
-    except Exception as e:
-        log_app_error("write_micro_survey", str(e), pid, group, exposure_id)
+    payload = {
+        "participant_id": pid,
+        "exposure_id": exposure_id,
+        "sequence_position": st.session_state.get("poi_index", 0) + 1,
+        "poi_id": poi_id,
+        "condition": condition,
+        **micro_data,
+        "submitted_at": datetime.now().isoformat()
+    }
+    ok = try_supabase_insert("micro_surveys", [
+        payload,
+        {**payload, "group_name": group},
+        {**{k: v for k, v in payload.items() if k != "submitted_at"}, "created_at": datetime.now().isoformat()},
+    ], "write_micro_survey", pid, group, exposure_id)
+    if not ok:
+        ok = try_supabase_insert("micro_survey", [
+            {**payload, "group": group, "timestamp": datetime.now().isoformat()},
+            {**payload, "group_name": group, "timestamp": datetime.now().isoformat()},
+        ], "write_micro_survey_legacy", pid, group, exposure_id)
+    if ok:
+        write_legacy_event("micro_survey_submitted", payload)
 
 def write_final_survey(pid, group, final_data):
     if not st.session_state.get("supabase"):
         return
-    try:
-        st.session_state.supabase.table("final_surveys").insert({
-            "participant_id": pid,
-            "preference": final_data.get("preference"),
-            "preference_reason": final_data.get("preference_reason"),
-            "trust_breakpoint": final_data.get("trust_breakpoint"),
-            "interruption_moment": final_data.get("interruption_moment"),
-            "open_comments": final_data.get("open_comments"),
-            "sus_json": final_data.get("sus"),
-            "toast_json": final_data.get("toast"),
-            "chat_quality_json": {k: v for k, v in final_data.items() if k.endswith("_c1") or k.endswith("_c2") or k.endswith("_c3") or k in ["recchatbox_c4", "recchatbox_c5"]},
-            "submitted_at": datetime.now().isoformat()
-        }).execute()
-    except Exception as e:
-        log_app_error("write_final_survey", str(e), pid, group)
+    payload = {
+        "participant_id": pid,
+        "preference": final_data.get("preference"),
+        "preference_reason": final_data.get("preference_reason"),
+        "trust_breakpoint": final_data.get("trust_breakpoint"),
+        "interruption_moment": final_data.get("interruption_moment"),
+        "open_comments": final_data.get("open_comments"),
+        "sus_json": final_data.get("sus"),
+        "toast_json": final_data.get("toast"),
+        "chat_quality_json": {k: v for k, v in final_data.items() if k.endswith("_c1") or k.endswith("_c2") or k.endswith("_c3") or k in ["recchatbox_c4", "recchatbox_c5"]},
+        "submitted_at": datetime.now().isoformat()
+    }
+    ok = try_supabase_insert("final_surveys", [
+        payload,
+        {**payload, "group_name": group},
+        {"participant_id": pid, "group_name": group, "final_data": final_data, "created_at": datetime.now().isoformat()},
+        {"participant_id": pid, "group": group, "final_data": final_data, "created_at": datetime.now().isoformat()},
+    ], "write_final_survey", pid, group)
+    if not ok:
+        ok = try_supabase_insert("final_survey", [
+            {"participant_id": pid, "group": group, "final_data": final_data, "timestamp": datetime.now().isoformat()},
+            {"participant_id": pid, "group_name": group, "final_data": final_data, "timestamp": datetime.now().isoformat()},
+        ], "write_final_survey_legacy", pid, group)
+    if ok:
+        write_legacy_event("final_survey_completed", {"final_data": final_data})
 
 def write_poi_completed(exposure_id, dwell_seconds):
     if not st.session_state.get("supabase"):
         return
-    try:
-        st.session_state.supabase.table("poi_exposures").update({
-            "next_click_ts": datetime.now().isoformat(),
+    ok = try_supabase_update("poi_exposures", [
+        {"next_click_ts": datetime.now().isoformat(), "dwell_seconds": dwell_seconds},
+        {"dwell_seconds": dwell_seconds},
+    ], "exposure_id", exposure_id, "write_poi_completed", exp_id=exposure_id)
+    if ok:
+        write_legacy_event("poi_exposure_completed", {
+            "exposure_id": exposure_id,
             "dwell_seconds": dwell_seconds
-        }).eq("exposure_id", exposure_id).execute()
-    except Exception as e:
-        log_app_error("write_poi_completed", str(e), exp_id=exposure_id)
+        })
 
 # ==================== 三个渲染函数（完整，推荐问题循环衍生） ====================
 def render_baseline(poi):
@@ -579,9 +702,6 @@ def render_recchatbox(poi):
         if st.button("🔊 朗读介绍", key="speak_intro"):
             st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
     
-    st.markdown("---")
-    st.markdown("#### 💡 推荐问题")
-    
     if "followup_generation" not in st.session_state:
         st.session_state.followup_generation = 0
 
@@ -592,14 +712,7 @@ def render_recchatbox(poi):
             f"这里与无锡本地文化有什么关联？",
             f"有什么值得关注的参观细节？"
         ])
-    
-    cols = st.columns(3)
-    for i, q in enumerate(st.session_state.followup_questions[:3]):
-        with cols[i]:
-            btn_key = f"rec_q_{st.session_state.followup_generation}_{i}"
-            if st.button(f"❓ {q[:20]}{'...' if len(q) > 20 else ''}", key=btn_key):
-                handle_question(q, poi, "recchatbox", query_type="suggested")
-    
+
     st.markdown("#### 💬 向 AI 提问")
     
     if "chat_messages" not in st.session_state:
@@ -610,6 +723,13 @@ def render_recchatbox(poi):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and "source" in msg:
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
+
+    st.markdown("#### 💡 推荐继续追问")
+    st.caption("点击任一问题后，AI 回答完会继续生成下一轮 3 个推荐问题。")
+    for i, q in enumerate(st.session_state.followup_questions[:3]):
+        btn_key = f"rec_q_{st.session_state.current_poi_id}_{st.session_state.followup_generation}_{i}"
+        if st.button(f"❓ {q}", key=btn_key, use_container_width=True):
+            handle_question(q, poi, "recchatbox", query_type="suggested")
     
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt, poi, "recchatbox", query_type="free")
@@ -636,12 +756,31 @@ def simulate_rag_engine(user_query, poi):
                       exp_id=st.session_state.get("current_exposure_id", "UNKNOWN"))
         return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time() - start
 
-def normalize_followup_questions(raw_questions, poi_name, user_question=""):
-    fallback = [
-        f"关于{poi_name}还有哪些历史细节？",
-        "这里与无锡本地文化有什么关联？",
-        "有什么值得关注的参观细节？"
+def fallback_followup_questions(poi_name, user_question=""):
+    round_no = st.session_state.get("followup_generation", 0) + 1
+    pools = [
+        [
+            f"{poi_name}最容易被游客误解的历史细节是什么？",
+            f"{poi_name}和惠山古镇整体文脉有什么关系？",
+            f"如果只记住一个关于{poi_name}的文化重点，应该是什么？"
+        ],
+        [
+            f"关于{poi_name}有没有更具体的史料来源？",
+            f"{poi_name}体现了哪些江南文化或地方价值？",
+            f"普通游客在现场观察{poi_name}时应注意什么？"
+        ],
+        [
+            f"{poi_name}的故事和今天的旅游体验有什么联系？",
+            f"关于{poi_name}，AI 的解释有哪些需要谨慎核查的地方？",
+            f"能否用更短的话概括{poi_name}的文化意义？"
+        ]
     ]
+    selected = pools[(round_no - 1) % len(pools)]
+    return [q for q in selected if q != user_question][:3]
+
+
+def normalize_followup_questions(raw_questions, poi_name, user_question=""):
+    fallback = fallback_followup_questions(poi_name, user_question)
 
     if isinstance(raw_questions, dict):
         raw_questions = (
@@ -675,7 +814,13 @@ def generate_followup_questions(user_question, ai_answer, pid):
     try:
         resp = requests.post("https://api.dify.ai/v1/chat-messages",
             headers={"Authorization": key, "Content-Type": "application/json"},
-            json={"inputs": {}, "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
+            json={"inputs": {"current_poi": poi_name}, "query": (
+                    f"当前文化遗产点位：{poi_name}\n"
+                    f"用户刚才的问题：{user_question}\n"
+                    f"AI刚才的回答：{ai_answer}\n"
+                    "请基于用户兴趣和刚才回答，生成下一轮刚好3个可点击的中文追问。"
+                    "要求：不要重复用户原问题；不要输出解释；只输出JSON数组，例如[\"问题1？\",\"问题2？\",\"问题3？\"]。"
+                ),
                   "response_mode": "blocking", "user": pid}, timeout=10)
         answer = resp.json().get("answer", "[]").strip()
         answer = re.sub(r"^```(?:json)?|```$", "", answer, flags=re.I | re.M).strip()
@@ -867,25 +1012,6 @@ def show_poi_page():
     """, unsafe_allow_html=True)
     st.markdown(f'<div class="jn-weather-bar">🌸 惠山古镇 · {get_weather_and_comfort()}</div>', unsafe_allow_html=True)
 
-    # 推荐卡片（无按钮，仅装饰）
-    st.markdown('<div class="jn-card"><div class="jn-section-title">📸 今日推荐 · 寻迹江南</div>', unsafe_allow_html=True)
-    cols = st.columns(5)
-    rec_list = [
-        ("天下第二泉", "erquan", RECOMMEND_IMG_URLS["天下第二泉"]),
-        ("古华山门", "guhuashanmen", RECOMMEND_IMG_URLS["古华山门"]),
-        ("知鱼槛", "bayinjian", RECOMMEND_IMG_URLS["知鱼槛"]),
-        ("竹炉山房", "zhulu_shanfang", RECOMMEND_IMG_URLS["竹炉山房"]),
-        ("范文正公祠", "fanwenzheng_gongci", RECOMMEND_IMG_URLS["范文正公祠"])
-    ]
-    for i, (name, _, url) in enumerate(rec_list):
-        with cols[i]:
-            img_url = get_img_url_or_local(
-                {"天下第二泉": "二泉.jpg", "古华山门": "金莲桥.jpg", "知鱼槛": "知鱼栏.jpg",
-                 "竹炉山房": "竹炉山房.jpg", "范文正公祠": "范文公正祠.jpg"}[name], url)
-            st.image(img_url, use_column_width=True, output_format="JPEG")
-            st.markdown(f'<div class="recommend-name">{name}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
     # 条件渲染
     if condition == "baseline":
         render_baseline(poi_data)
@@ -1024,12 +1150,67 @@ def show_done():
     st.markdown("补偿码：`HS-3A-2024`。您可以关闭此页面了。")
     st.caption("惠山古镇 AI 导览员实验研究 | 江南大学")
 
+
+def show_direct_condition_page():
+    condition = st.query_params.get("condition", "baseline")
+    poi_id = st.query_params.get("poi", POI_ORDER[0])
+    if condition not in VALID_CONDITIONS:
+        condition = "baseline"
+    if poi_id not in POI_ORDER:
+        poi_id = POI_ORDER[0]
+
+    poi_idx = POI_ORDER.index(poi_id)
+    poi = POIS[poi_idx]
+    poi_data = poi_database.get(poi_id, {"name": poi["name"], "info": "暂无详细介绍。"})
+    direct_key = f"{condition}:{poi_id}"
+
+    st.session_state.group = st.query_params.get("group", st.session_state.get("group", "G_DIRECT"))
+    st.session_state.current_poi_id = poi_id
+    st.session_state.current_poi_name = poi["name"]
+    st.session_state.current_condition = condition
+
+    if st.session_state.get("active_direct_key") != direct_key:
+        st.session_state.current_exposure_id = str(uuid.uuid4())
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
+        st.session_state.poi_page_load_ts = time.time()
+        st.session_state.active_direct_key = direct_key
+        write_poi_exposure(
+            pid=st.session_state.participant_id,
+            group=st.session_state.group,
+            exposure_id=st.session_state.current_exposure_id,
+            poi_id=poi_id,
+            condition=condition,
+            sequence_position=poi_idx + 1,
+            page_load_ts=st.session_state.poi_page_load_ts
+        )
+
+    st.caption(f"直接测试模式：{CONDITION_CODE_MAP[condition]} · {poi['name']}")
+    st.markdown(f"""
+    <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
+      <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
+      <div class="jn-hero-sub">直接测试：{poi['name']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if condition == "baseline":
+        render_baseline(poi_data)
+    elif condition == "free_text":
+        render_free_text_rag(poi_data)
+    else:
+        render_recchatbox(poi_data)
+
+
 # ==================== 主入口 ====================
 def main():
     if "participant_id" not in st.session_state:
         st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
     if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
         st.session_state.group = st.query_params.get("group")
+    if st.query_params.get("condition") in VALID_CONDITIONS:
+        show_direct_condition_page()
+        return
     if "stage" not in st.session_state:
         st.session_state.stage = "intro"
     stage = st.session_state.stage
