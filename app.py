@@ -214,11 +214,15 @@ window.speakText = function(text) {
         alert("您的浏览器不支持语音合成");
         return;
     }
-    var utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'zh-CN';
-    utterance.rate = 0.9;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
+    try {
+        var utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 0.9;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+    } catch(e) {
+        console.error("语音合成错误:", e);
+    }
 };
 </script>
 """, unsafe_allow_html=True)
@@ -420,37 +424,75 @@ def log_event(event_type, payload=None):
     except Exception as e:
         log_app_error(f"log_event_{event_type}", e, extra=payload)
 
-# ==================== Dify RAG 函数 ====================
+# ==================== Dify RAG 函数（修复密钥与错误提示） ====================
+def get_dify_token(api_name):
+    """从 secrets 读取纯 token，不包含 'Bearer '"""
+    raw = st.secrets.get(api_name, "")
+    # 如果用户配置时误加了 "Bearer " 前缀，自动去除
+    if raw.startswith("Bearer "):
+        raw = raw[7:]
+    return raw
+
 def simulate_rag_engine(user_query, poi):
     start = time.time()
-    key = st.secrets.get("DIFY_API_KEY_MAIN", "Bearer app-rzITs8smrzMUhhdraDriLuRp")
+    token = get_dify_token("DIFY_API_KEY_MAIN")
+    if not token:
+        st.error("⚠️ 系统错误：未配置 Dify API 密钥，请联系管理员。")
+        return "【配置错误】AI 服务未就绪。", "配置错误", "[Error]", time.time()-start
     try:
-        resp = requests.post("https://api.dify.ai/v1/chat-messages",
-            headers={"Authorization": key, "Content-Type": "application/json"},
-            json={"inputs": {"current_poi": poi["name"]}, "query": user_query,
-                  "response_mode": "blocking", "user": st.session_state.get("participant_id")},
-            timeout=15)
+        resp = requests.post(
+            "https://api.dify.ai/v1/chat-messages",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
+                "inputs": {"current_poi": poi["name"]},
+                "query": user_query,
+                "response_mode": "blocking",
+                "user": st.session_state.get("participant_id", "unknown")
+            },
+            timeout=10
+        )
         resp.raise_for_status()
         data = resp.json()
         ans = data.get("answer", "抱歉，无法回答。")
         resources = data.get("metadata", {}).get("retriever_resources", [])
         src = f"官方数字认证：{resources[0].get('dataset_name', '无锡史志库')}" if resources else "惠山古镇文献库"
         return ans, src, str(resources), time.time()-start
+    except requests.exceptions.Timeout:
+        err_msg = "AI 服务响应超时，请稍后重试。"
+        st.warning(err_msg)
+        log_app_error("simulate_rag_engine_timeout", err_msg, {"query": user_query, "poi": poi["name"]})
+        return err_msg, "网络超时", "[Timeout]", time.time()-start
     except Exception as e:
-        log_app_error("simulate_rag_engine", e, extra={"query": user_query, "poi": poi["name"]})
+        err_msg = f"AI 服务异常：{str(e)}"
+        st.error(err_msg)
+        log_app_error("simulate_rag_engine", e, {"query": user_query, "poi": poi["name"]})
         return "【网络或服务异常】请稍后重试。", "故障降级", "[Error]", time.time()-start
 
 def generate_followup_questions(user_question, ai_answer, pid):
-    key = st.secrets.get("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
+    token = get_dify_token("DIFY_API_KEY_FOLLOWUP")
+    if not token:
+        return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
+                "这里与无锡本地文化有什么关联？",
+                "有什么值得关注的参观细节？"]
     try:
-        resp = requests.post("https://api.dify.ai/v1/chat-messages",
-            headers={"Authorization": key, "Content-Type": "application/json"},
-            json={"inputs": {}, "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
-                  "response_mode": "blocking", "user": pid}, timeout=10)
+        resp = requests.post(
+            "https://api.dify.ai/v1/chat-messages",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
+                "inputs": {},
+                "query": f"用户问题：{user_question}\nAI回答：{ai_answer}\n请输出3个后续问题，JSON格式",
+                "response_mode": "blocking",
+                "user": pid
+            },
+            timeout=10
+        )
         match = re.search(r'\[.*\]', resp.json().get("answer", "[]"))
-        return json.loads(match.group(0)) if match else []
+        questions = json.loads(match.group(0)) if match else []
+        while len(questions) < 3:
+            questions.append("您还想了解更多关于这里的历史渊源吗？")
+        return questions[:3]
     except Exception as e:
-        log_app_error("generate_followup_questions", e, extra={"user_question": user_question})
+        log_app_error("generate_followup_questions", e, {"user_question": user_question})
         return [f"关于{st.session_state.current_poi_name}还有哪些历史细节？",
                 "这里与无锡本地文化有什么关联？",
                 "有什么值得关注的参观细节？"]
@@ -470,7 +512,13 @@ def handle_question(question, poi, cond):
             "query_text": question, "response_text": ans,
             "response_latency_ms": round(elap*1000), "retrieved_chunks": chunks, "source_chip": src
         })
-        st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
+        # 尝试语音播报
+        try:
+            safe_ans = ans.replace('"', '\\"').replace('\n', ' ')
+            st.markdown(f'<script>speakText("{safe_ans}")</script>', unsafe_allow_html=True)
+        except Exception as e:
+            log_app_error("speakText", e, {"answer": ans[:100]})
+        
         if cond == "recchatbox":
             st.session_state.followup_questions = generate_followup_questions(question, ans, st.session_state.participant_id)
         else:
@@ -503,7 +551,8 @@ def render_baseline(poi):
     voice_col, _ = st.columns([1, 5])
     with voice_col:
         if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
+            safe_info = poi["info"].replace('"', '\\"').replace('\n', ' ')
+            st.markdown(f'<script>speakText("{safe_info}")</script>', unsafe_allow_html=True)
     
     st.caption("✨ 静态展示模式 · 无 AI 对话")
 
@@ -524,7 +573,8 @@ def render_free_text_rag(poi):
     voice_col, _ = st.columns([1, 5])
     with voice_col:
         if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
+            safe_info = poi["info"].replace('"', '\\"').replace('\n', ' ')
+            st.markdown(f'<script>speakText("{safe_info}")</script>', unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("#### 💬 向 AI 提问")
@@ -537,9 +587,6 @@ def render_free_text_rag(poi):
                 st.markdown(msg["content"])
                 if msg["role"] == "assistant" and "source" in msg:
                     st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
-    else:
-        # 没有历史消息时不显示任何内容
-        pass
     
     if prompt := st.chat_input("输入您的问题..."):
         handle_question(prompt, poi, "free_text")
@@ -561,7 +608,8 @@ def render_recchatbox(poi):
     voice_col, _ = st.columns([1, 5])
     with voice_col:
         if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
+            safe_info = poi["info"].replace('"', '\\"').replace('\n', ' ')
+            st.markdown(f'<script>speakText("{safe_info}")</script>', unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("#### 💡 推荐问题")
