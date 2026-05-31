@@ -1267,13 +1267,16 @@ def field_survey_url(kind, params):
     return build_external_survey_url(safe_secret(secret_key, ""), params)
 
 
+APP_BASE_URL = "https://huishan-guide-app-d5d45rkqrmgcptdynxx4yj.streamlit.app/"
+
+
 def field_app_url(pid, group, step=None, pause=False):
     params = {"field": "1", "pid": pid, "group": group}
     if step is not None:
         params["step"] = step
     if pause:
         params["pause"] = "1"
-    return build_external_survey_url("", params) or "?" + "&".join([f"{quote(str(k))}={quote(str(v))}" for k, v in params.items()])
+    return build_external_survey_url(safe_secret("APP_BASE_URL", APP_BASE_URL), params)
 
 
 def field_int_query(name, default=None):
