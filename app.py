@@ -293,6 +293,18 @@ GROUP_CONDITION_MAP = {
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 CONDITION_CODE_MAP = {"baseline": "A", "free_text": "B", "recchatbox": "C"}
 VALID_CONDITIONS = set(CONDITION_CODE_MAP.keys())
+FIELD_MODE_VALUES = {"1", "true", "yes", "field", "formal"}
+
+
+def is_field_mode():
+    return str(st.query_params.get("field", "")).strip().lower() in FIELD_MODE_VALUES
+
+
+def field_query_value(name, default=""):
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return value[0] if value else default
+    return value or default
 
 
 def group_sequence_code(group):
@@ -1214,12 +1226,276 @@ def show_direct_condition_page():
         render_recchatbox(poi_data)
 
 
+def build_external_survey_url(base_url, params):
+    if not base_url:
+        return ""
+    sep = "&" if "?" in base_url else "?"
+    query = "&".join([f"{quote(str(k))}={quote(str(v))}" for k, v in params.items() if v is not None])
+    return f"{base_url}{sep}{query}" if query else base_url
+
+
+def field_survey_url(kind, params):
+    secret_key = {
+        "pretest": "WJX_PRETEST_URL",
+        "micro": "WJX_MICRO_SURVEY_URL",
+        "final": "WJX_FINAL_SURVEY_URL"
+    }.get(kind)
+    if not secret_key:
+        return ""
+    return build_external_survey_url(st.secrets.get(secret_key, ""), params)
+
+
+def field_mode_setup():
+    pid = field_query_value("pid", st.session_state.get("participant_id", ""))
+    group = field_query_value("group", st.session_state.get("group", ""))
+
+    if not pid:
+        pid = f"P_FIELD_{uuid.uuid4().hex[:6]}"
+    st.session_state.participant_id = pid
+
+    if group in VALID_GROUPS:
+        st.session_state.group = group
+    elif "group" not in st.session_state or st.session_state.get("group") not in VALID_GROUPS:
+        st.session_state.group = None
+
+    subject_key = f"{st.session_state.participant_id}:{st.session_state.get('group')}"
+    if st.session_state.get("field_subject_key") != subject_key:
+        st.session_state.field_subject_key = subject_key
+        st.session_state.field_stage = "field_intro"
+        st.session_state.field_poi_index = 0
+        st.session_state.active_field_key = None
+        st.session_state.current_exposure_id = None
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
+
+    st.session_state.setdefault("field_stage", "field_intro")
+    st.session_state.setdefault("field_poi_index", 0)
+
+
+def show_field_intro():
+    st.markdown(f"""
+    <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{MAIN_IMG_URL}');">
+      <div class="jn-hero-title">惠山古镇 <span>现场实验模式</span></div>
+      <div class="jn-hero-sub">Streamlit 只负责 A/B/C 体验刺激与 Supabase 行为日志；问卷由研究者平板在问卷星中采集。</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.session_state.get("group") not in VALID_GROUPS:
+        st.error("正式现场模式需要在 URL 中传入有效 group，例如：?field=1&pid=P001&group=G1")
+        st.stop()
+
+    pid = st.session_state.participant_id
+    group = st.session_state.group
+    sequence = group_sequence_code(group)
+    st.markdown(f"""
+    <div class="jn-card">
+      <div class="jn-section-title">📋 正式现场实验信息</div>
+      <p><strong>participant_id：</strong>{pid}</p>
+      <p><strong>group：</strong>{group}｜<strong>5 POI 条件序列：</strong>{sequence}</p>
+      <p>请先用研究者平板完成问卷星 Q1「知情同意与前测」。确认提交后，再点击下方按钮进入路线。</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    pretest_url = field_survey_url("pretest", {"participant_id": pid, "group": group})
+    if pretest_url:
+        st.link_button("📝 打开 Q1 前测问卷星", pretest_url, use_container_width=True)
+    else:
+        st.info("如未在 Streamlit Secrets 配置 WJX_PRETEST_URL，请研究者用平板手动打开 Q1，并填写 participant_id 与 group。")
+
+    if st.button("🚶 Q1 已完成，开始现场路线", use_container_width=True):
+        st.session_state.field_stage = "field_poi"
+        st.session_state.field_poi_index = 0
+        st.session_state.route_start_ts = time.time()
+        write_legacy_event("field_route_started", {
+            "participant_id": pid,
+            "group": group,
+            "assigned_sequence": sequence
+        })
+        st.rerun()
+
+
+def field_current_metadata(poi_idx):
+    group = st.session_state.group
+    condition = GROUP_CONDITION_MAP[group][poi_idx]
+    poi = POIS[poi_idx]
+    return {
+        "participant_id": st.session_state.participant_id,
+        "group": group,
+        "sequence_position": poi_idx + 1,
+        "poi_id": poi["id"],
+        "poi_name": poi["name"],
+        "condition": condition,
+        "condition_code": CONDITION_CODE_MAP[condition],
+        "condition_order": group_sequence_code(group)
+    }
+
+
+def show_field_poi_page():
+    poi_idx = st.session_state.get("field_poi_index", 0)
+    if poi_idx >= len(POIS):
+        st.session_state.field_stage = "field_final"
+        st.rerun()
+        return
+
+    meta = field_current_metadata(poi_idx)
+    poi_data = poi_database.get(meta["poi_id"], {"name": meta["poi_name"], "info": "暂无详细介绍。"})
+    st.session_state.current_poi_id = meta["poi_id"]
+    st.session_state.current_poi_name = meta["poi_name"]
+    st.session_state.current_condition = meta["condition"]
+
+    active_key = f"field:{meta['participant_id']}:{meta['group']}:{poi_idx}:{meta['poi_id']}:{meta['condition']}"
+    if st.session_state.get("active_field_key") != active_key:
+        exposure_id = f"{meta['participant_id']}_{meta['poi_id']}_{meta['condition']}_{meta['sequence_position']}_{uuid.uuid4().hex[:4]}"
+        st.session_state.current_exposure_id = exposure_id
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
+        st.session_state.poi_page_load_ts = time.time()
+        st.session_state.active_field_key = active_key
+
+        write_poi_exposure(
+            pid=meta["participant_id"],
+            group=meta["group"],
+            exposure_id=exposure_id,
+            poi_id=meta["poi_id"],
+            condition=meta["condition"],
+            sequence_position=meta["sequence_position"],
+            page_load_ts=st.session_state.poi_page_load_ts
+        )
+
+    st.caption(
+        f"正式现场模式｜{meta['participant_id']}｜{meta['group']}｜"
+        f"POI {meta['sequence_position']}/5｜条件 {meta['condition_code']}"
+    )
+    st.markdown(f"""
+    <div class="jn-hero" style="background-image: linear-gradient(90deg, rgba(10,30,36,.68), rgba(10,30,36,.28)), url('{get_img_url_or_local("主图.jpg", MAIN_IMG_URL)}');">
+      <div class="jn-hero-title">惠山古镇 <span>AI 导览员</span></div>
+      <div class="jn-hero-sub">请先观察真实点位 30 秒，再使用当前界面完成体验。</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="jn-card">
+      <b>现场口径：</b>请被试先看眼前点位 30 秒。研究者不解释文化内容，只处理操作问题。<br>
+      <b>当前元数据：</b>{meta['poi_name']}｜{meta['condition_code']} {meta['condition']}｜
+      exposure_id: <code>{st.session_state.current_exposure_id}</code>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if meta["condition"] == "baseline":
+        render_baseline(poi_data)
+    elif meta["condition"] == "free_text":
+        render_free_text_rag(poi_data)
+    else:
+        render_recchatbox(poi_data)
+
+    if st.button("✅ 完成当前点位体验，进入平板微问卷环节", use_container_width=True):
+        dwell = time.time() - st.session_state.poi_page_load_ts
+        write_poi_completed(st.session_state.current_exposure_id, round(dwell, 2))
+        st.session_state.pending_field_meta = {
+            **meta,
+            "exposure_id": st.session_state.current_exposure_id,
+            "dwell_seconds": round(dwell, 2)
+        }
+        st.session_state.field_stage = "field_micro_pause"
+        st.rerun()
+
+
+def show_field_micro_pause():
+    meta = st.session_state.get("pending_field_meta")
+    if not meta:
+        st.session_state.field_stage = "field_poi"
+        st.rerun()
+        return
+
+    st.title("📋 请完成该点位平板微问卷")
+    st.markdown(f"""
+    <div class="jn-card">
+      <div class="jn-section-title">交给问卷星 Q2 的元数据</div>
+      <p><strong>participant_id：</strong>{meta['participant_id']}</p>
+      <p><strong>group：</strong>{meta['group']}</p>
+      <p><strong>sequence_position：</strong>{meta['sequence_position']}</p>
+      <p><strong>poi_id：</strong>{meta['poi_id']}</p>
+      <p><strong>poi_name：</strong>{meta['poi_name']}</p>
+      <p><strong>condition：</strong>{meta['condition']}（{meta['condition_code']}）</p>
+      <p><strong>exposure_id：</strong><code>{meta['exposure_id']}</code></p>
+      <p><strong>dwell_seconds：</strong>{meta['dwell_seconds']}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    micro_url = field_survey_url("micro", meta)
+    if micro_url:
+        st.link_button("📝 打开 Q2 当前点位微问卷", micro_url, use_container_width=True)
+    else:
+        st.info("如未配置 WJX_MICRO_SURVEY_URL，请研究者在平板 Q2 第一页手动录入以上元数据。")
+
+    st.warning("确认 Q2 已提交后再进入下一站。不要让被试边走边填问卷。")
+    next_label = "➡️ Q2 已提交，进入下一站" if meta["sequence_position"] < len(POIS) else "✅ Q2 已提交，进入终测"
+    if st.button(next_label, use_container_width=True):
+        st.session_state.field_poi_index = meta["sequence_position"]
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
+        if st.session_state.field_poi_index >= len(POIS):
+            st.session_state.field_stage = "field_final"
+        else:
+            st.session_state.field_stage = "field_poi"
+        st.rerun()
+
+
+def show_field_final():
+    pid = st.session_state.participant_id
+    group = st.session_state.group
+    st.title("🎯 路线体验完成")
+    st.success("Streamlit 体验与 Supabase 行为日志采集已完成。")
+    st.markdown(f"""
+    <div class="jn-card">
+      <p><strong>participant_id：</strong>{pid}</p>
+      <p><strong>group：</strong>{group}</p>
+      <p><strong>条件序列：</strong>{group_sequence_code(group)}</p>
+      <p>请在安静位置使用研究者平板完成问卷星 Q3「终测与偏好访谈」。</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    final_url = field_survey_url("final", {"participant_id": pid, "group": group})
+    if final_url:
+        st.link_button("📝 打开 Q3 终测问卷星", final_url, use_container_width=True)
+    else:
+        st.info("如未配置 WJX_FINAL_SURVEY_URL，请研究者用平板手动打开 Q3，并填写 participant_id 与 group。")
+
+    if st.button("🔄 重置为该被试现场模式首页", use_container_width=True):
+        st.session_state.field_stage = "field_intro"
+        st.session_state.field_poi_index = 0
+        st.session_state.active_field_key = None
+        write_legacy_event("field_route_completed", {"participant_id": pid, "group": group})
+        st.rerun()
+
+
+def show_field_mode():
+    field_mode_setup()
+    stage = st.session_state.get("field_stage", "field_intro")
+    if stage == "field_intro":
+        show_field_intro()
+    elif stage == "field_poi":
+        show_field_poi_page()
+    elif stage == "field_micro_pause":
+        show_field_micro_pause()
+    elif stage == "field_final":
+        show_field_final()
+    else:
+        st.session_state.field_stage = "field_intro"
+        st.rerun()
+
+
 # ==================== 主入口 ====================
 def main():
     if "participant_id" not in st.session_state:
         st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
     if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
         st.session_state.group = st.query_params.get("group")
+    if is_field_mode():
+        show_field_mode()
+        return
     if st.query_params.get("condition") in VALID_CONDITIONS:
         show_direct_condition_page()
         return
