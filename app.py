@@ -8,8 +8,12 @@ import uuid
 from datetime import datetime
 import pandas as pd
 import requests
-from supabase import create_client
 from urllib.parse import quote
+
+try:
+    from supabase import create_client
+except ImportError:
+    create_client = None
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="collapsed")
@@ -294,10 +298,15 @@ VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 CONDITION_CODE_MAP = {"baseline": "A", "free_text": "B", "recchatbox": "C"}
 VALID_CONDITIONS = set(CONDITION_CODE_MAP.keys())
 FIELD_MODE_VALUES = {"1", "true", "yes", "field", "formal"}
+LEGACY_MODE_VALUES = {"1", "true", "yes", "legacy", "all_in_one"}
 
 
 def is_field_mode():
     return str(st.query_params.get("field", "")).strip().lower() in FIELD_MODE_VALUES
+
+
+def is_legacy_mode():
+    return str(st.query_params.get("legacy", "")).strip().lower() in LEGACY_MODE_VALUES
 
 
 def field_query_value(name, default=""):
@@ -305,6 +314,13 @@ def field_query_value(name, default=""):
     if isinstance(value, list):
         return value[0] if value else default
     return value or default
+
+
+def safe_secret(name, default=""):
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
 
 
 def group_sequence_code(group):
@@ -440,9 +456,15 @@ def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="U
 # ==================== Supabase 客户端 ====================
 if "supabase" not in st.session_state:
     try:
+        if create_client is None:
+            raise ImportError("supabase package is not installed in this environment")
+        supabase_url = safe_secret("SUPABASE_URL")
+        supabase_key = safe_secret("SUPABASE_KEY")
+        if not supabase_url or not supabase_key:
+            raise RuntimeError("SUPABASE_URL or SUPABASE_KEY is not configured")
         st.session_state.supabase = create_client(
-            st.secrets["SUPABASE_URL"],
-            st.secrets["SUPABASE_KEY"]
+            supabase_url,
+            supabase_key
         )
     except Exception as e:
         st.session_state.supabase = None
@@ -758,7 +780,7 @@ def render_recchatbox(poi):
 # ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query, poi):
     start = time.time()
-    key = st.secrets.get("DIFY_API_KEY_MAIN", "Bearer app-rzITs8smrzMUhhdraDriLuRp")
+    key = safe_secret("DIFY_API_KEY_MAIN", "Bearer app-rzITs8smrzMUhhdraDriLuRp")
     try:
         resp = requests.post("https://api.dify.ai/v1/chat-messages",
             headers={"Authorization": key, "Content-Type": "application/json"},
@@ -830,7 +852,7 @@ def normalize_followup_questions(raw_questions, poi_name, user_question=""):
 
 
 def generate_followup_questions(user_question, ai_answer, pid):
-    key = st.secrets.get("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
+    key = safe_secret("DIFY_API_KEY_FOLLOWUP", "Bearer app-CCck7NxI8NLZIxf24Q247Hti")
     poi_name = st.session_state.get("current_poi_name", "当前点位")
     try:
         resp = requests.post("https://api.dify.ai/v1/chat-messages",
@@ -1242,7 +1264,24 @@ def field_survey_url(kind, params):
     }.get(kind)
     if not secret_key:
         return ""
-    return build_external_survey_url(st.secrets.get(secret_key, ""), params)
+    return build_external_survey_url(safe_secret(secret_key, ""), params)
+
+
+def field_app_url(pid, group, step=None, pause=False):
+    params = {"field": "1", "pid": pid, "group": group}
+    if step is not None:
+        params["step"] = step
+    if pause:
+        params["pause"] = "1"
+    return build_external_survey_url("", params) or "?" + "&".join([f"{quote(str(k))}={quote(str(v))}" for k, v in params.items()])
+
+
+def field_int_query(name, default=None):
+    raw = field_query_value(name, "")
+    try:
+        return int(raw)
+    except Exception:
+        return default
 
 
 def field_mode_setup():
@@ -1265,9 +1304,21 @@ def field_mode_setup():
         st.session_state.field_poi_index = 0
         st.session_state.active_field_key = None
         st.session_state.current_exposure_id = None
+        st.session_state.field_route_completed_logged = False
+        st.session_state.field_route_started_logged = False
         st.session_state.chat_messages = []
         st.session_state.followup_questions = []
         st.session_state.followup_generation = 0
+
+    step_from_url = field_int_query("step", None)
+    pause_from_url = str(field_query_value("pause", "")).strip().lower() in FIELD_MODE_VALUES
+    if step_from_url is not None:
+        if step_from_url >= len(POIS):
+            st.session_state.field_stage = "field_final"
+            st.session_state.field_poi_index = len(POIS)
+        else:
+            st.session_state.field_poi_index = max(0, min(step_from_url, len(POIS) - 1))
+            st.session_state.field_stage = "field_micro_pause" if pause_from_url and st.session_state.get("pending_field_meta") else "field_poi"
 
     st.session_state.setdefault("field_stage", "field_intro")
     st.session_state.setdefault("field_poi_index", 0)
@@ -1303,16 +1354,8 @@ def show_field_intro():
     else:
         st.info("如未在 Streamlit Secrets 配置 WJX_PRETEST_URL，请研究者用平板手动打开 Q1，并填写 participant_id 与 group。")
 
-    if st.button("🚶 Q1 已完成，开始现场路线", use_container_width=True):
-        st.session_state.field_stage = "field_poi"
-        st.session_state.field_poi_index = 0
-        st.session_state.route_start_ts = time.time()
-        write_legacy_event("field_route_started", {
-            "participant_id": pid,
-            "group": group,
-            "assigned_sequence": sequence
-        })
-        st.rerun()
+    st.link_button("🚶 Q1 已完成，开始现场路线", field_app_url(pid, group, step=0), use_container_width=True)
+    st.caption("现场稳定版：此按钮采用 URL 导航，Safari 断线或刷新后仍可回到正确路线。")
 
 
 def field_current_metadata(poi_idx):
@@ -1346,6 +1389,13 @@ def show_field_poi_page():
 
     active_key = f"field:{meta['participant_id']}:{meta['group']}:{poi_idx}:{meta['poi_id']}:{meta['condition']}"
     if st.session_state.get("active_field_key") != active_key:
+        if meta["sequence_position"] == 1 and not st.session_state.get("field_route_started_logged"):
+            write_legacy_event("field_route_started", {
+                "participant_id": meta["participant_id"],
+                "group": meta["group"],
+                "assigned_sequence": meta["condition_order"]
+            })
+            st.session_state.field_route_started_logged = True
         exposure_id = f"{meta['participant_id']}_{meta['poi_id']}_{meta['condition']}_{meta['sequence_position']}_{uuid.uuid4().hex[:4]}"
         st.session_state.current_exposure_id = exposure_id
         st.session_state.chat_messages = []
@@ -1398,6 +1448,8 @@ def show_field_poi_page():
             "dwell_seconds": round(dwell, 2)
         }
         st.session_state.field_stage = "field_micro_pause"
+        st.query_params["step"] = str(meta["sequence_position"] - 1)
+        st.query_params["pause"] = "1"
         st.rerun()
 
 
@@ -1422,6 +1474,18 @@ def show_field_micro_pause():
       <p><strong>dwell_seconds：</strong>{meta['dwell_seconds']}</p>
     </div>
     """, unsafe_allow_html=True)
+    st.code(
+        "\n".join([
+            f"participant_id={meta['participant_id']}",
+            f"group={meta['group']}",
+            f"sequence_position={meta['sequence_position']}",
+            f"poi_id={meta['poi_id']}",
+            f"condition={meta['condition']}",
+            f"exposure_id={meta['exposure_id']}",
+            f"dwell_seconds={meta['dwell_seconds']}",
+        ]),
+        language="text"
+    )
 
     micro_url = field_survey_url("micro", meta)
     if micro_url:
@@ -1430,22 +1494,24 @@ def show_field_micro_pause():
         st.info("如未配置 WJX_MICRO_SURVEY_URL，请研究者在平板 Q2 第一页手动录入以上元数据。")
 
     st.warning("确认 Q2 已提交后再进入下一站。不要让被试边走边填问卷。")
-    next_label = "➡️ Q2 已提交，进入下一站" if meta["sequence_position"] < len(POIS) else "✅ Q2 已提交，进入终测"
-    if st.button(next_label, use_container_width=True):
-        st.session_state.field_poi_index = meta["sequence_position"]
-        st.session_state.chat_messages = []
-        st.session_state.followup_questions = []
-        st.session_state.followup_generation = 0
-        if st.session_state.field_poi_index >= len(POIS):
-            st.session_state.field_stage = "field_final"
-        else:
-            st.session_state.field_stage = "field_poi"
-        st.rerun()
+    next_step = meta["sequence_position"]
+    next_label = "➡️ Q2 已提交，进入下一站" if next_step < len(POIS) else "✅ Q2 已提交，进入终测"
+    st.link_button(next_label, field_app_url(meta["participant_id"], meta["group"], step=next_step), use_container_width=True)
+    st.caption("该导航不依赖 Streamlit WebSocket；若现场网络断开，刷新当前链接即可恢复。")
 
 
 def show_field_final():
     pid = st.session_state.participant_id
     group = st.session_state.group
+    if not st.session_state.get("field_route_completed_logged"):
+        write_legacy_event("field_route_completed", {
+            "participant_id": pid,
+            "group": group,
+            "assigned_sequence": group_sequence_code(group),
+            "completed_poi_count": len(POIS),
+            "route_end_ts": datetime.now().isoformat()
+        })
+        st.session_state.field_route_completed_logged = True
     st.title("🎯 路线体验完成")
     st.success("Streamlit 体验与 Supabase 行为日志采集已完成。")
     st.markdown(f"""
@@ -1463,12 +1529,7 @@ def show_field_final():
     else:
         st.info("如未配置 WJX_FINAL_SURVEY_URL，请研究者用平板手动打开 Q3，并填写 participant_id 与 group。")
 
-    if st.button("🔄 重置为该被试现场模式首页", use_container_width=True):
-        st.session_state.field_stage = "field_intro"
-        st.session_state.field_poi_index = 0
-        st.session_state.active_field_key = None
-        write_legacy_event("field_route_completed", {"participant_id": pid, "group": group})
-        st.rerun()
+    st.link_button("🔄 重置为该被试现场模式首页", field_app_url(pid, group), use_container_width=True)
 
 
 def show_field_mode():
@@ -1493,11 +1554,11 @@ def main():
         st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
     if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
         st.session_state.group = st.query_params.get("group")
-    if is_field_mode():
-        show_field_mode()
-        return
     if st.query_params.get("condition") in VALID_CONDITIONS:
         show_direct_condition_page()
+        return
+    if is_field_mode() or not is_legacy_mode():
+        show_field_mode()
         return
     if "stage" not in st.session_state:
         st.session_state.stage = "intro"
