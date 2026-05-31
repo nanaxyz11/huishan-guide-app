@@ -10,10 +10,7 @@ import pandas as pd
 import requests
 from urllib.parse import quote
 
-try:
-    from supabase import create_client
-except ImportError:
-    create_client = None
+create_client = None
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="惠山古镇 AI 导览 | 非遗数字体验", layout="centered", initial_sidebar_state="collapsed")
@@ -343,6 +340,62 @@ def remember_supabase_error(context, error_detail, payload=None):
     })
 
 
+def get_supabase_config():
+    url = (safe_secret("SUPABASE_URL") or "").rstrip("/")
+    key = safe_secret("SUPABASE_KEY")
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL or SUPABASE_KEY is not configured")
+    token = key.replace("Bearer ", "")
+    return url, token
+
+
+def supabase_rest_headers(token):
+    return {
+        "apikey": token,
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+
+
+def supabase_rest_insert(table_name, payload):
+    url, token = get_supabase_config()
+    resp = requests.post(
+        f"{url}/rest/v1/{table_name}",
+        headers=supabase_rest_headers(token),
+        json=payload,
+        timeout=10
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Supabase insert {table_name} failed: {resp.status_code} {resp.text[:500]}")
+    return True
+
+
+def supabase_rest_update(table_name, payload, eq_col, eq_value):
+    url, token = get_supabase_config()
+    resp = requests.patch(
+        f"{url}/rest/v1/{table_name}?{quote(str(eq_col))}=eq.{quote(str(eq_value), safe='')}",
+        headers=supabase_rest_headers(token),
+        json=payload,
+        timeout=10
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Supabase update {table_name} failed: {resp.status_code} {resp.text[:500]}")
+    return True
+
+
+def supabase_rest_select(table_name, columns="*", limit=1000):
+    url, token = get_supabase_config()
+    resp = requests.get(
+        f"{url}/rest/v1/{table_name}?select={quote(columns, safe=',')}&limit={int(limit)}",
+        headers=supabase_rest_headers(token),
+        timeout=10
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Supabase select {table_name} failed: {resp.status_code} {resp.text[:500]}")
+    return resp.json()
+
+
 def try_supabase_insert(table_name, payload_variants, context, pid="UNKNOWN", grp="UNKNOWN", exp_id="UNKNOWN"):
     supabase = st.session_state.get("supabase")
     if not supabase:
@@ -352,7 +405,7 @@ def try_supabase_insert(table_name, payload_variants, context, pid="UNKNOWN", gr
     last_error = None
     for payload in payload_variants:
         try:
-            supabase.table(table_name).insert(payload).execute()
+            supabase_rest_insert(table_name, payload)
             return True
         except Exception as e:
             last_error = e
@@ -371,7 +424,7 @@ def try_supabase_update(table_name, update_payload_variants, eq_col, eq_value, c
     last_error = None
     for payload in update_payload_variants:
         try:
-            supabase.table(table_name).update(payload).eq(eq_col, eq_value).execute()
+            supabase_rest_update(table_name, payload, eq_col, eq_value)
             return True
         except Exception as e:
             last_error = e
@@ -448,24 +501,19 @@ def log_app_error(context, error_detail, pid="UNKNOWN", grp="UNKNOWN", exp_id="U
             error_data
         ]:
             try:
-                st.session_state.supabase.table("app_errors").insert(payload).execute()
+                supabase_rest_insert("app_errors", payload)
                 break
             except:
                 pass
 
-# ==================== Supabase 客户端 ====================
+# ==================== Supabase REST 配置 ====================
 if "supabase" not in st.session_state:
     try:
-        if create_client is None:
-            raise ImportError("supabase package is not installed in this environment")
         supabase_url = safe_secret("SUPABASE_URL")
         supabase_key = safe_secret("SUPABASE_KEY")
         if not supabase_url or not supabase_key:
             raise RuntimeError("SUPABASE_URL or SUPABASE_KEY is not configured")
-        st.session_state.supabase = create_client(
-            supabase_url,
-            supabase_key
-        )
+        st.session_state.supabase = {"url": supabase_url.rstrip("/"), "key_configured": True}
     except Exception as e:
         st.session_state.supabase = None
         error_data = {
@@ -488,10 +536,10 @@ def assign_group_balanced():
         last_error = None
         for group_col in ["group_name", "group_code", "group"]:
             try:
-                res = supabase.table("participants").select(group_col).execute()
-                if res.data:
+                rows = supabase_rest_select("participants", group_col)
+                if rows:
                     cnt = {g: 0 for g in VALID_GROUPS}
-                    for row in res.data:
+                    for row in rows:
                         if row.get(group_col) in cnt:
                             cnt[row[group_col]] += 1
                     return min(cnt, key=cnt.get)
