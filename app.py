@@ -1335,6 +1335,26 @@ def field_int_query(name, default=None):
         return default
 
 
+def set_field_query_params(step=None, pause=False):
+    st.query_params["field"] = "1"
+    st.query_params["pid"] = st.session_state.participant_id
+    st.query_params["group"] = st.session_state.group
+    if step is None:
+        try:
+            del st.query_params["step"]
+        except Exception:
+            pass
+    else:
+        st.query_params["step"] = str(step)
+    if pause:
+        st.query_params["pause"] = "1"
+    else:
+        try:
+            del st.query_params["pause"]
+        except Exception:
+            pass
+
+
 def field_mode_setup():
     pid = field_query_value("pid", st.session_state.get("participant_id", ""))
     group = field_query_value("group", st.session_state.get("group", ""))
@@ -1405,8 +1425,20 @@ def show_field_intro():
     else:
         st.info("如未在 Streamlit Secrets 配置 WJX_PRETEST_URL，请研究者用平板手动打开 Q1，并填写 participant_id 与 group。")
 
-    st.link_button("🚶 Q1 已完成，开始现场路线", field_app_url(pid, group, step=0), use_container_width=True)
-    st.caption("现场稳定版：此按钮采用 URL 导航，Safari 断线或刷新后仍可回到正确路线。")
+    if st.button("🚶 Q1 已完成，开始现场路线", use_container_width=True):
+        st.session_state.field_stage = "field_poi"
+        st.session_state.field_poi_index = 0
+        st.session_state.route_start_ts = time.time()
+        set_field_query_params(step=0)
+        if not st.session_state.get("field_route_started_logged"):
+            write_legacy_event("field_route_started", {
+                "participant_id": pid,
+                "group": group,
+                "assigned_sequence": sequence
+            })
+            st.session_state.field_route_started_logged = True
+        st.rerun()
+    st.caption("现场稳定版：按钮在当前页内进入路线，同时保留 step 参数，Safari 刷新后仍可回到正确路线。")
 
 
 def field_current_metadata(poi_idx):
@@ -1547,7 +1579,18 @@ def show_field_micro_pause():
     st.warning("确认 Q2 已提交后再进入下一站。不要让被试边走边填问卷。")
     next_step = meta["sequence_position"]
     next_label = "➡️ Q2 已提交，进入下一站" if next_step < len(POIS) else "✅ Q2 已提交，进入终测"
-    st.link_button(next_label, field_app_url(meta["participant_id"], meta["group"], step=next_step), use_container_width=True)
+    if st.button(next_label, use_container_width=True):
+        st.session_state.field_poi_index = next_step
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
+        if next_step >= len(POIS):
+            st.session_state.field_stage = "field_final"
+            set_field_query_params(step=len(POIS))
+        else:
+            st.session_state.field_stage = "field_poi"
+            set_field_query_params(step=next_step)
+        st.rerun()
     st.caption("该导航不依赖 Streamlit WebSocket；若现场网络断开，刷新当前链接即可恢复。")
 
 
@@ -1580,7 +1623,18 @@ def show_field_final():
     else:
         st.info("如未配置 WJX_FINAL_SURVEY_URL，请研究者用平板手动打开 Q3，并填写 participant_id 与 group。")
 
-    st.link_button("🔄 重置为该被试现场模式首页", field_app_url(pid, group), use_container_width=True)
+    if st.button("🔄 重置为该被试现场模式首页", use_container_width=True):
+        st.session_state.field_stage = "field_intro"
+        st.session_state.field_poi_index = 0
+        st.session_state.active_field_key = None
+        st.session_state.current_exposure_id = None
+        st.session_state.field_route_completed_logged = False
+        st.session_state.field_route_started_logged = False
+        st.session_state.chat_messages = []
+        st.session_state.followup_questions = []
+        st.session_state.followup_generation = 0
+        set_field_query_params()
+        st.rerun()
 
 
 def show_field_mode():
