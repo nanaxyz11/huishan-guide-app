@@ -648,6 +648,8 @@ def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_posi
         {**base_payload, "group_code": group},
         {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition, "group_name": group, "created_at": datetime.now().isoformat()},
         {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition},
+        {"participant_id": pid, "group_name": group, "exposure_id": exposure_id},
+        {"participant_id": pid, "exposure_id": exposure_id},
     ], "write_poi_exposure", pid, group, exposure_id)
     write_legacy_event("poi_exposure_started", {
         "exposure_id": exposure_id,
@@ -1504,11 +1506,14 @@ def show_field_intro():
             if not pid_clean:
                 st.error("participant_id 不能为空；建议格式为 P001、P002……")
                 st.stop()
+            fixed_url = field_app_url(pid_clean, group_input)
             st.session_state.participant_id = pid_clean
             st.session_state.group = group_input
             st.session_state.field_needs_subject_setup = False
-            set_field_query_params()
-            st.rerun()
+            st.success("固定链接已生成。请点击下方按钮进入该被试的正式现场信息页。")
+            st.link_button("打开该被试固定链接", fixed_url, use_container_width=True)
+            st.code(fixed_url, language="text")
+            st.stop()
         st.info("也可以继续使用旧格式直达链接：?field=1&pid=P001&group=G1。")
         st.stop()
 
@@ -1531,20 +1536,9 @@ def show_field_intro():
     else:
         st.info("如未在 Streamlit Secrets 配置 WJX_PRETEST_URL，请研究者用平板手动打开 Q1，并填写 participant_id 与 group。")
 
-    if st.button("🚶 Q1 已完成，开始现场路线", use_container_width=True):
-        st.session_state.field_stage = "field_poi"
-        st.session_state.field_poi_index = 0
-        st.session_state.route_start_ts = time.time()
-        set_field_query_params(step=0)
-        if not st.session_state.get("field_route_started_logged"):
-            write_legacy_event("field_route_started", {
-                "participant_id": pid,
-                "group": group,
-                "assigned_sequence": sequence
-            })
-            st.session_state.field_route_started_logged = True
-        st.rerun()
-    st.caption("现场稳定版：按钮在当前页内进入路线，同时保留 step 参数，Safari 刷新后仍可回到正确路线。")
+    start_url = field_app_url(pid, group, step=0)
+    st.link_button("🚶 Q1 已完成，开始现场路线", start_url, use_container_width=True)
+    st.caption("现场稳定版：点击后硬跳转到 step=0 的 POI 页面；Safari 刷新后仍可回到正确路线。")
 
 
 def field_current_metadata(poi_idx):
@@ -1764,13 +1758,15 @@ def show_field_mode():
 # ==================== 主入口 ====================
 def main():
     if "participant_id" not in st.session_state:
-        if is_field_mode() and not st.query_params.get("pid"):
+        pid_from_url = field_query_value("pid", "")
+        if is_field_mode() and not pid_from_url:
             st.session_state.participant_id = ""
         else:
-            st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
-    if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
-        st.session_state.group = st.query_params.get("group")
-    if st.query_params.get("condition") in VALID_CONDITIONS:
+            st.session_state.participant_id = pid_from_url or f"P_{uuid.uuid4().hex[:8]}"
+    group_from_url = field_query_value("group", "")
+    if "group" not in st.session_state and group_from_url in VALID_GROUPS:
+        st.session_state.group = group_from_url
+    if field_query_value("condition", "") in VALID_CONDITIONS:
         show_direct_condition_page()
         return
     if is_field_mode() or not is_legacy_mode():
