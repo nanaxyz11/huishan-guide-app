@@ -1474,6 +1474,7 @@ def field_mode_setup():
             if pause_from_url and (st.session_state.get("pending_field_meta") or restore_pending_micro_meta_from_url()):
                 st.session_state.field_stage = "field_micro_pause"
             else:
+                st.session_state.pending_field_meta = None
                 st.session_state.field_stage = "field_poi"
 
     st.session_state.setdefault("field_stage", "field_intro")
@@ -1681,19 +1682,9 @@ def show_field_micro_pause():
     st.warning("确认 Q2 已提交后再进入下一站。不要让被试边走边填问卷。")
     next_step = meta["sequence_position"]
     next_label = "➡️ Q2 已提交，进入下一站" if next_step < len(POIS) else "✅ Q2 已提交，进入终测"
-    if st.button(next_label, use_container_width=True):
-        st.session_state.field_poi_index = next_step
-        st.session_state.chat_messages = []
-        st.session_state.followup_questions = []
-        st.session_state.followup_generation = 0
-        if next_step >= len(POIS):
-            st.session_state.field_stage = "field_final"
-            set_field_query_params(step=len(POIS))
-        else:
-            st.session_state.field_stage = "field_poi"
-            set_field_query_params(step=next_step)
-        st.rerun()
-    st.caption("该导航不依赖 Streamlit WebSocket；若现场网络断开，刷新当前链接即可恢复。")
+    next_url = field_app_url(meta["participant_id"], meta["group"], step=next_step)
+    st.link_button(next_label, next_url, use_container_width=True)
+    st.caption("现场稳定版：该按钮使用硬链接跳转，会清除 pause 状态；若现场网络断开，打开当前被试固定链接或刷新当前站点链接即可恢复。")
 
 
 def show_field_final():
