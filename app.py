@@ -371,6 +371,21 @@ def supabase_rest_insert(table_name, payload):
     return True
 
 
+def supabase_rest_upsert_ignore(table_name, payload, conflict_col):
+    url, token = get_supabase_config()
+    headers = supabase_rest_headers(token)
+    headers["Prefer"] = "resolution=ignore-duplicates,return=minimal"
+    resp = requests.post(
+        f"{url}/rest/v1/{table_name}?on_conflict={quote(str(conflict_col), safe='')}",
+        headers=headers,
+        json=payload,
+        timeout=10
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Supabase upsert {table_name} failed: {resp.status_code} {resp.text[:500]}")
+    return True
+
+
 def supabase_rest_update(table_name, payload, eq_col, eq_value):
     url, token = get_supabase_config()
     resp = requests.patch(
@@ -552,6 +567,34 @@ def assign_group_balanced():
     return random.choice(VALID_GROUPS)
 
 # ==================== 数据库写入函数（8 表拆分） ====================
+def ensure_field_participant(pid, group):
+    """Create a minimal participant row for field mode so poi_exposures FK will not fail.
+    WJX still owns Q1 data; this row only preserves participant_id/group linkage in Supabase.
+    """
+    if not st.session_state.get("supabase") or not pid or group not in VALID_GROUPS:
+        return
+    base = {
+        "participant_id": pid,
+        "assigned_sequence": group_sequence_code(group),
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+    variants = [
+        {**base, "group_code": group},
+        {**base, "group_name": group},
+        {**base, "group": group},
+    ]
+    last_error = None
+    for payload in variants:
+        try:
+            supabase_rest_upsert_ignore("participants", payload, "participant_id")
+            return
+        except Exception as e:
+            last_error = e
+    remember_supabase_error("ensure_field_participant", last_error, variants[-1])
+    log_app_error("ensure_field_participant", str(last_error), pid=pid, grp=group)
+
+
 def write_participant(pid, group, pretest_data):
     if not st.session_state.get("supabase"):
         return
@@ -1349,26 +1392,63 @@ def set_field_query_params(step=None, pause=False):
     if pause:
         st.query_params["pause"] = "1"
     else:
-        try:
-            del st.query_params["pause"]
-        except Exception:
-            pass
+        for key in ["pause", "completed_exposure_id", "dwell_seconds"]:
+            try:
+                del st.query_params[key]
+            except Exception:
+                pass
+
+
+def restore_pending_micro_meta_from_url():
+    step_from_url = field_int_query("step", None)
+    pause_from_url = str(field_query_value("pause", "")).strip().lower() in FIELD_MODE_VALUES
+    if not pause_from_url or step_from_url is None:
+        return None
+    if not st.session_state.get("participant_id") or st.session_state.get("group") not in VALID_GROUPS:
+        return None
+    if step_from_url < 0 or step_from_url >= len(POIS):
+        return None
+    meta = field_current_metadata(step_from_url)
+    exposure_id = field_query_value("completed_exposure_id", st.session_state.get("current_exposure_id", ""))
+    dwell_raw = field_query_value("dwell_seconds", "")
+    try:
+        dwell_seconds = round(float(dwell_raw), 2)
+    except Exception:
+        dwell_seconds = None
+    if exposure_id:
+        meta["exposure_id"] = exposure_id
+    if dwell_seconds is not None:
+        meta["dwell_seconds"] = dwell_seconds
+    if "exposure_id" in meta and "dwell_seconds" in meta:
+        st.session_state.pending_field_meta = meta
+        return meta
+    return None
 
 
 def field_mode_setup():
-    pid = field_query_value("pid", st.session_state.get("participant_id", ""))
-    group = field_query_value("group", st.session_state.get("group", ""))
+    pid = field_query_value("pid", "")
+    group = field_query_value("group", "")
+    if not pid and group in VALID_GROUPS:
+        pid = st.session_state.get("participant_id", "")
+    if not group:
+        group = st.session_state.get("group", "")
 
-    if not pid:
-        pid = f"P_FIELD_{uuid.uuid4().hex[:6]}"
-    st.session_state.participant_id = pid
+    # 正式现场模式允许一个统一入口链接：?field=1。
+    # 若 URL 未带 pid/group，先进入研究助理设置页，不自动生成被试 ID，
+    # 避免把随机 P_FIELD_* 误写入问卷星或 Supabase。
+    st.session_state.field_needs_subject_setup = not (pid and group in VALID_GROUPS)
+
+    if pid:
+        st.session_state.participant_id = pid
+    elif "participant_id" not in st.session_state:
+        st.session_state.participant_id = ""
 
     if group in VALID_GROUPS:
         st.session_state.group = group
     elif "group" not in st.session_state or st.session_state.get("group") not in VALID_GROUPS:
         st.session_state.group = None
 
-    subject_key = f"{st.session_state.participant_id}:{st.session_state.get('group')}"
+    subject_key = f"{st.session_state.get('participant_id', '')}:{st.session_state.get('group')}"
     if st.session_state.get("field_subject_key") != subject_key:
         st.session_state.field_subject_key = subject_key
         st.session_state.field_stage = "field_intro"
@@ -1389,7 +1469,10 @@ def field_mode_setup():
             st.session_state.field_poi_index = len(POIS)
         else:
             st.session_state.field_poi_index = max(0, min(step_from_url, len(POIS) - 1))
-            st.session_state.field_stage = "field_micro_pause" if pause_from_url and st.session_state.get("pending_field_meta") else "field_poi"
+            if pause_from_url and (st.session_state.get("pending_field_meta") or restore_pending_micro_meta_from_url()):
+                st.session_state.field_stage = "field_micro_pause"
+            else:
+                st.session_state.field_stage = "field_poi"
 
     st.session_state.setdefault("field_stage", "field_intro")
     st.session_state.setdefault("field_poi_index", 0)
@@ -1403,13 +1486,36 @@ def show_field_intro():
     </div>
     """, unsafe_allow_html=True)
 
-    if st.session_state.get("group") not in VALID_GROUPS:
-        st.error("正式现场模式需要在 URL 中传入有效 group，例如：?field=1&pid=P001&group=G1")
+    if st.session_state.get("field_needs_subject_setup") or st.session_state.get("group") not in VALID_GROUPS or not st.session_state.get("participant_id"):
+        st.markdown("""
+        <div class="jn-card">
+          <div class="jn-section-title">🧾 研究助理入口设置</div>
+          <p>此页用于把统一入口链接转换为某一名被试的固定现场链接。正式实验中，每名被试仍然只对应一个 participant_id 和一个 group。</p>
+        </div>
+        """, unsafe_allow_html=True)
+        with st.form("field_subject_setup_form"):
+            default_pid = st.session_state.get("participant_id") or "P001"
+            pid_input = st.text_input("participant_id（例如 P001）", value=default_pid)
+            group_input = st.selectbox("group（六组完全交叉平衡顺序）", VALID_GROUPS, index=0)
+            st.caption("G1=ABCAB｜G2=ACBAC｜G3=BACBA｜G4=BCABC｜G5=CABCA｜G6=CBACB")
+            submitted = st.form_submit_button("生成该被试固定链接并进入实验首页", use_container_width=True)
+        if submitted:
+            pid_clean = re.sub(r"[^A-Za-z0-9_\-]", "", pid_input.strip())
+            if not pid_clean:
+                st.error("participant_id 不能为空；建议格式为 P001、P002……")
+                st.stop()
+            st.session_state.participant_id = pid_clean
+            st.session_state.group = group_input
+            st.session_state.field_needs_subject_setup = False
+            set_field_query_params()
+            st.rerun()
+        st.info("也可以继续使用旧格式直达链接：?field=1&pid=P001&group=G1。")
         st.stop()
 
     pid = st.session_state.participant_id
     group = st.session_state.group
     sequence = group_sequence_code(group)
+    ensure_field_participant(pid, group)
     st.markdown(f"""
     <div class="jn-card">
       <div class="jn-section-title">📋 正式现场实验信息</div>
@@ -1479,7 +1585,7 @@ def show_field_poi_page():
                 "assigned_sequence": meta["condition_order"]
             })
             st.session_state.field_route_started_logged = True
-        exposure_id = f"{meta['participant_id']}_{meta['poi_id']}_{meta['condition']}_{meta['sequence_position']}_{uuid.uuid4().hex[:4]}"
+        exposure_id = str(uuid.uuid4())
         st.session_state.current_exposure_id = exposure_id
         st.session_state.chat_messages = []
         st.session_state.followup_questions = []
@@ -1533,11 +1639,13 @@ def show_field_poi_page():
         st.session_state.field_stage = "field_micro_pause"
         st.query_params["step"] = str(meta["sequence_position"] - 1)
         st.query_params["pause"] = "1"
+        st.query_params["completed_exposure_id"] = st.session_state.current_exposure_id
+        st.query_params["dwell_seconds"] = str(round(dwell, 2))
         st.rerun()
 
 
 def show_field_micro_pause():
-    meta = st.session_state.get("pending_field_meta")
+    meta = st.session_state.get("pending_field_meta") or restore_pending_micro_meta_from_url()
     if not meta:
         st.session_state.field_stage = "field_poi"
         st.rerun()
@@ -1656,7 +1764,10 @@ def show_field_mode():
 # ==================== 主入口 ====================
 def main():
     if "participant_id" not in st.session_state:
-        st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
+        if is_field_mode() and not st.query_params.get("pid"):
+            st.session_state.participant_id = ""
+        else:
+            st.session_state.participant_id = st.query_params.get("pid", f"P_{uuid.uuid4().hex[:8]}")
     if "group" not in st.session_state and st.query_params.get("group") in VALID_GROUPS:
         st.session_state.group = st.query_params.get("group")
     if st.query_params.get("condition") in VALID_CONDITIONS:
