@@ -810,7 +810,7 @@ def render_free_text_rag(poi):
     with st.form(f"free_text_query_form_{st.session_state.get('current_poi_id', poi['name'])}_{st.session_state.get('current_exposure_id', 'noexp')}"):
         prompt = st.text_area(
             "输入您的问题",
-            placeholder="例如：这个点位最值得注意的历史细节是什么？",
+            placeholder="请输入您想了解的问题。",
             height=88,
             key=f"free_text_query_{st.session_state.get('current_exposure_id', 'noexp')}"
         )
