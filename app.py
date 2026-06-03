@@ -780,11 +780,6 @@ def render_baseline(poi):
     
     st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
     
-    voice_col, _ = st.columns([1, 5])
-    with voice_col:
-        if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-    
     st.caption("✨ 静态展示模式 · 无 AI 对话")
 
 def render_free_text_rag(poi):
@@ -800,11 +795,6 @@ def render_free_text_rag(poi):
     
     st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
     
-    voice_col, _ = st.columns([1, 5])
-    with voice_col:
-        if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
-    
     st.markdown("---")
     st.markdown("#### 💬 向 AI 提问")
     
@@ -817,10 +807,27 @@ def render_free_text_rag(poi):
             if msg["role"] == "assistant" and "source" in msg:
                 st.markdown(f'<span class="source-chip">🔍 {msg["source"]}</span>', unsafe_allow_html=True)
     
-    if prompt := st.chat_input("输入您的问题..."):
-        handle_question(prompt, poi, "free_text")
+    with st.form(f"free_text_query_form_{st.session_state.get('current_poi_id', poi['name'])}_{st.session_state.get('current_exposure_id', 'noexp')}"):
+        prompt = st.text_area(
+            "输入您的问题",
+            placeholder="例如：这个点位最值得注意的历史细节是什么？",
+            height=88,
+            key=f"free_text_query_{st.session_state.get('current_exposure_id', 'noexp')}"
+        )
+        submitted = st.form_submit_button("发送问题", use_container_width=True)
+    if submitted and prompt.strip():
+        handle_question(prompt.strip(), poi, "free_text", query_type="free")
 
 def render_recchatbox(poi):
+    pending = st.session_state.pop("recchatbox_pending_question", None)
+    if pending and pending.get("exposure_id") == st.session_state.get("current_exposure_id"):
+        handle_question(
+            pending.get("question", ""),
+            poi,
+            "recchatbox",
+            query_type=pending.get("query_type", "suggested")
+        )
+
     st.markdown(f"""
     <div class="jn-card">
       <div style="display:flex; align-items:center; gap:8px;">
@@ -832,11 +839,6 @@ def render_recchatbox(poi):
     """, unsafe_allow_html=True)
     
     st.markdown(f'<span class="source-chip">🔍 {poi.get("source", "惠山古镇文献库")}</span>', unsafe_allow_html=True)
-    
-    voice_col, _ = st.columns([1, 5])
-    with voice_col:
-        if st.button("🔊 朗读介绍", key="speak_intro"):
-            st.markdown(f'<script>speakText("{poi["info"]}")</script>', unsafe_allow_html=True)
     
     if "followup_generation" not in st.session_state:
         st.session_state.followup_generation = 0
@@ -865,10 +867,20 @@ def render_recchatbox(poi):
     for i, q in enumerate(st.session_state.followup_questions[:3]):
         btn_key = f"rec_q_{st.session_state.current_poi_id}_{st.session_state.followup_generation}_{i}"
         if st.button(f"❓ {q}", key=btn_key, use_container_width=True):
-            handle_question(q, poi, "recchatbox", query_type="suggested")
+            st.session_state.recchatbox_pending_question = {
+                "question": q,
+                "query_type": "suggested",
+                "exposure_id": st.session_state.get("current_exposure_id")
+            }
+            st.rerun()
     
     if prompt := st.chat_input("输入您的问题..."):
-        handle_question(prompt, poi, "recchatbox", query_type="free")
+        st.session_state.recchatbox_pending_question = {
+            "question": prompt,
+            "query_type": "free",
+            "exposure_id": st.session_state.get("current_exposure_id")
+        }
+        st.rerun()
 
 # ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query, poi):
@@ -986,6 +998,7 @@ def handle_question(question, poi, cond, query_type=None):
             st.session_state.chat_messages = []
         st.session_state.chat_messages.append({"role": "user", "content": question})
         st.session_state.chat_messages.append({"role": "assistant", "content": ans, "source": src})
+        st.session_state.chat_messages = st.session_state.chat_messages[-8:]
 
         write_interaction_turn(
             exposure_id=st.session_state.get("current_exposure_id", "UNKNOWN"),
@@ -996,8 +1009,6 @@ def handle_question(question, poi, cond, query_type=None):
             retrieved_chunks=chunks,
             source_chip=src
         )
-
-        st.markdown(f'<script>speakText("{ans.replace('"', '\\"')}")</script>', unsafe_allow_html=True)
 
         # RecChatbox 每轮回答后都生成下一轮 3 个推荐问题。
         if cond == "recchatbox":
