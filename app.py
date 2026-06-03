@@ -293,6 +293,13 @@ GROUP_CONDITION_MAP = {
 }
 VALID_GROUPS = list(GROUP_CONDITION_MAP.keys())
 CONDITION_CODE_MAP = {"baseline": "A", "free_text": "B", "recchatbox": "C"}
+POI_CODE_MAP = {
+    "fanwenzheng_gongci": "FWZ",
+    "guhuashanmen": "GHS",
+    "bayinjian": "BYJ",
+    "zhulu_shanfang": "ZLS",
+    "erquan": "EQ"
+}
 VALID_CONDITIONS = set(CONDITION_CODE_MAP.keys())
 FIELD_MODE_VALUES = {"1", "true", "yes", "field", "formal"}
 LEGACY_MODE_VALUES = {"1", "true", "yes", "legacy", "all_in_one"}
@@ -322,6 +329,14 @@ def safe_secret(name, default=""):
 
 def group_sequence_code(group):
     return "".join(CONDITION_CODE_MAP.get(c, "?") for c in GROUP_CONDITION_MAP.get(group, []))
+
+
+def build_exposure_code(pid, group, sequence_position, condition, poi_id):
+    pid_part = re.sub(r"[^A-Za-z0-9_-]", "", str(pid or "PXXX")).upper()
+    group_part = re.sub(r"[^A-Za-z0-9_-]", "", str(group or "G?")).upper()
+    condition_part = CONDITION_CODE_MAP.get(condition, "?")
+    poi_part = POI_CODE_MAP.get(poi_id, str(poi_id or "POI")[:3].upper())
+    return f"{pid_part}-{group_part}-S{int(sequence_position):02d}-{condition_part}-{poi_part}"
 
 
 def safe_int(value):
@@ -628,12 +643,13 @@ def write_participant(pid, group, pretest_data):
     ], "write_participant", pid, group)
     write_legacy_event("pretest_completed", {"pretest_data": pretest_data})
 
-def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts):
+def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_position, page_load_ts, exposure_code=None):
     if not st.session_state.get("supabase"):
         return
     base_payload = {
         "participant_id": pid,
         "exposure_id": exposure_id,
+        "exposure_code": exposure_code,
         "poi_id": poi_id,
         "poi_name": st.session_state.get("current_poi_name"),
         "condition": condition,
@@ -646,6 +662,7 @@ def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_posi
     ok = try_supabase_insert("poi_exposures", [
         {**base_payload, "group_name": group},
         {**base_payload, "group_code": group},
+        {k: v for k, v in {**base_payload, "group_name": group}.items() if k != "exposure_code"},
         {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition, "group_name": group, "created_at": datetime.now().isoformat()},
         {"participant_id": pid, "exposure_id": exposure_id, "poi_id": poi_id, "condition": condition},
         {"participant_id": pid, "group_name": group, "exposure_id": exposure_id},
@@ -653,6 +670,7 @@ def write_poi_exposure(pid, group, exposure_id, poi_id, condition, sequence_posi
     ], "write_poi_exposure", pid, group, exposure_id)
     write_legacy_event("poi_exposure_started", {
         "exposure_id": exposure_id,
+        "exposure_code": exposure_code,
         "sequence_position": sequence_position,
         "page_load_ts": datetime.fromtimestamp(page_load_ts).isoformat()
     })
@@ -819,15 +837,6 @@ def render_free_text_rag(poi):
         handle_question(prompt.strip(), poi, "free_text", query_type="free")
 
 def render_recchatbox(poi):
-    pending = st.session_state.pop("recchatbox_pending_question", None)
-    if pending and pending.get("exposure_id") == st.session_state.get("current_exposure_id"):
-        handle_question(
-            pending.get("question", ""),
-            poi,
-            "recchatbox",
-            query_type=pending.get("query_type", "suggested")
-        )
-
     st.markdown(f"""
     <div class="jn-card">
       <div style="display:flex; align-items:center; gap:8px;">
@@ -867,20 +876,18 @@ def render_recchatbox(poi):
     for i, q in enumerate(st.session_state.followup_questions[:3]):
         btn_key = f"rec_q_{st.session_state.current_poi_id}_{st.session_state.followup_generation}_{i}"
         if st.button(f"❓ {q}", key=btn_key, use_container_width=True):
-            st.session_state.recchatbox_pending_question = {
-                "question": q,
-                "query_type": "suggested",
-                "exposure_id": st.session_state.get("current_exposure_id")
-            }
-            st.rerun()
+            handle_question(q, poi, "recchatbox", query_type="suggested")
     
-    if prompt := st.chat_input("输入您的问题..."):
-        st.session_state.recchatbox_pending_question = {
-            "question": prompt,
-            "query_type": "free",
-            "exposure_id": st.session_state.get("current_exposure_id")
-        }
-        st.rerun()
+    with st.form(f"recchatbox_query_form_{st.session_state.get('current_poi_id', poi['name'])}_{st.session_state.get('current_exposure_id', 'noexp')}"):
+        prompt = st.text_area(
+            "输入您的问题",
+            placeholder="请输入您想了解的问题。",
+            height=88,
+            key=f"recchatbox_query_{st.session_state.get('current_exposure_id', 'noexp')}"
+        )
+        submitted = st.form_submit_button("发送问题", use_container_width=True)
+    if submitted and prompt.strip():
+        handle_question(prompt.strip(), poi, "recchatbox", query_type="free")
 
 # ==================== Dify RAG 函数 ====================
 def simulate_rag_engine(user_query, poi):
@@ -1134,7 +1141,9 @@ def show_poi_page():
     # 只在真正进入新 POI 时生成 exposure_id。聊天触发 st.rerun() 时不能清空状态。
     if st.session_state.get("active_poi_index") != poi_idx:
         exposure_id = str(uuid.uuid4())
+        exposure_code = build_exposure_code(st.session_state.participant_id, st.session_state.group, poi_idx + 1, condition, poi["id"])
         st.session_state.current_exposure_id = exposure_id
+        st.session_state.current_exposure_code = exposure_code
         st.session_state.chat_messages = []
         st.session_state.followup_questions = []
         st.session_state.followup_generation = 0
@@ -1148,7 +1157,8 @@ def show_poi_page():
             poi_id=poi["id"],
             condition=condition,
             sequence_position=poi_idx + 1,
-            page_load_ts=st.session_state.poi_page_load_ts
+            page_load_ts=st.session_state.poi_page_load_ts,
+            exposure_code=exposure_code
         )
 
     # Hero + 天气
@@ -1405,7 +1415,7 @@ def set_field_query_params(step=None, pause=False):
     if pause:
         st.query_params["pause"] = "1"
     else:
-        for key in ["pause", "completed_exposure_id", "dwell_seconds"]:
+        for key in ["pause", "completed_exposure_id", "completed_exposure_code", "dwell_seconds"]:
             try:
                 del st.query_params[key]
             except Exception:
@@ -1423,6 +1433,7 @@ def restore_pending_micro_meta_from_url():
         return None
     meta = field_current_metadata(step_from_url)
     exposure_id = field_query_value("completed_exposure_id", st.session_state.get("current_exposure_id", ""))
+    exposure_code = field_query_value("completed_exposure_code", meta.get("exposure_code", ""))
     dwell_raw = field_query_value("dwell_seconds", "")
     try:
         dwell_seconds = round(float(dwell_raw), 2)
@@ -1430,6 +1441,8 @@ def restore_pending_micro_meta_from_url():
         dwell_seconds = None
     if exposure_id:
         meta["exposure_id"] = exposure_id
+    if exposure_code:
+        meta["exposure_code"] = exposure_code
     if dwell_seconds is not None:
         meta["dwell_seconds"] = dwell_seconds
     if "exposure_id" in meta and "dwell_seconds" in meta:
@@ -1557,14 +1570,16 @@ def field_current_metadata(poi_idx):
     group = st.session_state.group
     condition = GROUP_CONDITION_MAP[group][poi_idx]
     poi = POIS[poi_idx]
+    sequence_position = poi_idx + 1
     return {
         "participant_id": st.session_state.participant_id,
         "group": group,
-        "sequence_position": poi_idx + 1,
+        "sequence_position": sequence_position,
         "poi_id": poi["id"],
         "poi_name": poi["name"],
         "condition": condition,
         "condition_code": CONDITION_CODE_MAP[condition],
+        "exposure_code": build_exposure_code(st.session_state.participant_id, group, sequence_position, condition, poi["id"]),
         "condition_order": group_sequence_code(group)
     }
 
@@ -1592,7 +1607,9 @@ def show_field_poi_page():
             })
             st.session_state.field_route_started_logged = True
         exposure_id = str(uuid.uuid4())
+        exposure_code = meta["exposure_code"]
         st.session_state.current_exposure_id = exposure_id
+        st.session_state.current_exposure_code = exposure_code
         st.session_state.chat_messages = []
         st.session_state.followup_questions = []
         st.session_state.followup_generation = 0
@@ -1606,7 +1623,8 @@ def show_field_poi_page():
             poi_id=meta["poi_id"],
             condition=meta["condition"],
             sequence_position=meta["sequence_position"],
-            page_load_ts=st.session_state.poi_page_load_ts
+            page_load_ts=st.session_state.poi_page_load_ts,
+            exposure_code=exposure_code
         )
 
     st.caption(
@@ -1623,7 +1641,7 @@ def show_field_poi_page():
     <div class="jn-card">
       <b>现场口径：</b>请被试先看眼前点位 30 秒。研究者不解释文化内容，只处理操作问题。<br>
       <b>当前元数据：</b>{meta['poi_name']}｜{meta['condition_code']} {meta['condition']}｜
-      exposure_id: <code>{st.session_state.current_exposure_id}</code>
+      exposure_code: <code>{meta['exposure_code']}</code>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1640,12 +1658,14 @@ def show_field_poi_page():
         st.session_state.pending_field_meta = {
             **meta,
             "exposure_id": st.session_state.current_exposure_id,
+            "exposure_code": meta["exposure_code"],
             "dwell_seconds": round(dwell, 2)
         }
         st.session_state.field_stage = "field_micro_pause"
         st.query_params["step"] = str(meta["sequence_position"] - 1)
         st.query_params["pause"] = "1"
         st.query_params["completed_exposure_id"] = st.session_state.current_exposure_id
+        st.query_params["completed_exposure_code"] = meta["exposure_code"]
         st.query_params["dwell_seconds"] = str(round(dwell, 2))
         st.rerun()
 
@@ -1667,7 +1687,8 @@ def show_field_micro_pause():
       <p><strong>poi_id：</strong>{meta['poi_id']}</p>
       <p><strong>poi_name：</strong>{meta['poi_name']}</p>
       <p><strong>condition：</strong>{meta['condition']}（{meta['condition_code']}）</p>
-      <p><strong>exposure_id：</strong><code>{meta['exposure_id']}</code></p>
+      <p><strong>exposure_code：</strong><code>{meta['exposure_code']}</code></p>
+      <p><strong>exposure_id（后台自动字段）：</strong><code>{meta['exposure_id']}</code></p>
       <p><strong>dwell_seconds：</strong>{meta['dwell_seconds']}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1678,6 +1699,7 @@ def show_field_micro_pause():
             f"sequence_position={meta['sequence_position']}",
             f"poi_id={meta['poi_id']}",
             f"condition={meta['condition']}",
+            f"exposure_code={meta['exposure_code']}",
             f"exposure_id={meta['exposure_id']}",
             f"dwell_seconds={meta['dwell_seconds']}",
         ]),
